@@ -8,6 +8,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
+from app.llm.scoring import gate_failures, default_cutoffs, default_weights_percent, effective_cutoffs, effective_weights
 from app.llm.query_tools import Ctx, load_candidates
 from app.services import candidate_service as svc
 from app.services.skill_normalizer import load_aliases
@@ -45,7 +46,9 @@ def job_detail(conn: sqlite3.Connection, job_id: int) -> dict | None:
         "AND (extraction_status!='ok' OR verification_status='needs_review')", (job_id,)).fetchone()[0]
     failed = conn.execute("SELECT COUNT(*) FROM analysis_results WHERE job_description_id=? AND llm_status='unavailable'",
                           (job_id,)).fetchone()[0]
-    return {"id": job_id, **job.model_dump(), "scored": len(cands), "by_recommendation": by,
+    return {"id": job_id, **job.model_dump(), "weights": {k: round(v * 100, 1) for k, v in effective_weights(job).items()},
+            "weights_custom": job.weights is not None, "default_weights": default_weights_percent(),
+            "cutoffs": effective_cutoffs(job), "cutoffs_custom": job.cutoffs is not None, "default_cutoffs": default_cutoffs(), "scored": len(cands), "by_recommendation": by,
             "average_score": round(sum(c["score"] for c in cands) / len(cands), 1) if cands else None,
             "pending_choices": len(svc.pending_conflicts(conn, job_id)), "needs_review": review, "failed_analyses": failed}
 
@@ -67,6 +70,7 @@ def candidate_cards(conn: sqlite3.Connection, job_id: int) -> list[dict]:
             "application_id": c["application_id"], "rank": c["rank"], "name": c["name"], "email": c["email"], "phone": c["phone"],
             "file": c["file"], "score": c["score"], "recommendation": c["recommendation"], "components": c["components"],
             "required_matched": sum(b["status"] != "missing" for b in req), "required_total": len(req),
+            "gate_missing": gate_failures(job.gates, c["breakdown"]),
             "skills": c["breakdown"], "summary": c["summary"], "strengths": c["strengths"], "weaknesses": c["weaknesses"],
             "interview_questions": c["questions"], "experience_years": c["exp_years"], "internships": c["internships"],
             "soft_skills": c["soft_skills"], "projects": c["projects"], "certifications": c["certifications"],

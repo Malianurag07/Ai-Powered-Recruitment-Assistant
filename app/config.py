@@ -43,3 +43,17 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
 # PDF extraction thresholds
 MIN_TEXT_CHARS = 100          # fewer characters than this => treat as scanned/empty
 MAX_FILE_MB = 10
+
+# Free-tier planning numbers used by the upload-time estimate (app/services/quota.py). Providers change these often, so they are
+# settings, not facts: Groq's real remaining count is read from its response headers when available; Gemini reports none.
+GROQ_FAST_CALLS_PER_DAY = int(os.getenv("GROQ_FAST_CALLS_PER_DAY", "1000"))
+GROQ_CALLS_PER_DAY = int(os.getenv("GROQ_CALLS_PER_DAY", "1000"))
+GEMINI_CALLS_PER_DAY = int(os.getenv("GEMINI_CALLS_PER_DAY", "500"))
+BATCH_PAUSE_SECONDS = float(os.getenv("BATCH_PAUSE_SECONDS", "2"))             # gap between resumes of one batch
+BATCH_PAUSE_AFTER_LIMIT_SECONDS = float(os.getenv("BATCH_PAUSE_AFTER_LIMIT_SECONDS", "12"))   # gap while the provider is rate-limiting
+
+# OCR for scanned resumes: only used when a PDF has no text layer at all. Uses Gemini vision (free tier), so the page images leave
+# this machine like the resume text already does; it is off in LLM_MODE=local.
+OCR_ENABLED = os.getenv("OCR_ENABLED", "1") not in ("0", "false", "False")
+OCR_MAX_PAGES = int(os.getenv("OCR_MAX_PAGES", "3"))
+OCR_DPI = int(os.getenv("OCR_DPI", "150"))

@@ -15,6 +15,7 @@ class ExtractionResult:
     pages: int = 0
     message: str = ""
     hidden_text: str = ""     # text a human cannot see (white-on-white, microscopic, transparent) that was left out
+    ocr: bool = False         # True when the text was read from page images because the PDF had no text layer
 
     @property
     def ok(self) -> bool:

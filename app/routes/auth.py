@@ -67,10 +67,12 @@ def _fail(e: svc.AuthError, code: int = 422):
 
 
 @router.get("/auth/status")
-def status(db: sqlite3.Connection = Depends(deps.get_db)):
-    """Public: lets the UI know whether to show a login screen and whether sign-up is open."""
+def status(request: Request, db: sqlite3.Connection = Depends(deps.get_db)):
+    """Public: lets the UI know whether login is required, whether sign-up is open, and who is signed in (null if nobody;
+    reported here rather than via a 401 on /auth/me so a visitor's first page load logs no error)."""
     open_ = config.AUTH_ENABLED and (config.ALLOW_REGISTRATION or not svc.has_users(db))
-    return {"auth_enabled": config.AUTH_ENABLED, "registration_open": open_}
+    user = svc.user_for_token(db, request.cookies.get(COOKIE)) if config.AUTH_ENABLED else None
+    return {"auth_enabled": config.AUTH_ENABLED, "registration_open": open_, "user": user}
 
 
 @router.post("/auth/login")

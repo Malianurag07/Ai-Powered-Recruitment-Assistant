@@ -110,6 +110,9 @@ class JobProfile(BaseModel):
     min_experience_years: float | None = None
     soft_skills: list[str] = Field(default_factory=list)
     summary: str | None = None
+    weights: dict[str, float] | None = None      # recruiter's own score weights in percent; set from the database only, never by the AI
+    cutoffs: dict[str, float] | None = None      # recruiter's own {"shortlist": 70, "consider": 45}; database only, never the AI
+    gates: list[str] = Field(default_factory=list)   # required skills the recruiter marked as must-haves ("hard gates"); database only
 
     @field_validator("required_skills", "preferred_skills", "soft_skills", mode="before")
     @classmethod

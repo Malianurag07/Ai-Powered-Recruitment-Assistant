@@ -13,7 +13,7 @@ from typing import Callable
 
 from app.llm import client
 from app.llm.retrieval import hybrid_rank, unpack
-from app.llm.scoring import COLOUR, WEIGHTS, _canon, _implied_tools
+from app.llm.scoring import COLOUR, _canon, _implied_tools, effective_weights
 from app.models import JobProfile
 
 
@@ -211,14 +211,15 @@ def explain_ranking(ctx: Ctx, first: str, second: str) -> dict:
     if problems or len(found) < 2:
         return {"error": "Could not identify both candidates", "problems": problems}
     a, b = found
-    contrib = {k: {"first": round(WEIGHTS[k] * a["components"].get(k, 0), 1), "second": round(WEIGHTS[k] * b["components"].get(k, 0), 1)}
-               for k in WEIGHTS}
+    weights = effective_weights(ctx.job)
+    contrib = {k: {"first": round(weights[k] * a["components"].get(k, 0), 1), "second": round(weights[k] * b["components"].get(k, 0), 1)}
+               for k in weights}
     ha = {x["skill"] for x in a["breakdown"] if x["status"] != "missing"}
     hb = {x["skill"] for x in b["breakdown"] if x["status"] != "missing"}
     return {"first": {"name": a["name"], "rank": a["rank"], "score": a["score"], "weaknesses": a["weaknesses"]},
             "second": {"name": b["name"], "rank": b["rank"], "score": b["score"], "weaknesses": b["weaknesses"]},
             "first_is_ranked_higher": a["rank"] < b["rank"], "score_difference": round(a["score"] - b["score"], 1),
-            "weighted_points_by_component": contrib, "component_weights": WEIGHTS,
+            "weighted_points_by_component": contrib, "component_weights": weights,
             "skills_only_first_has": sorted(ha - hb), "skills_only_second_has": sorted(hb - ha),
             "required_skills_matched": {"first": _brief_row(a)["required_skills_matched"], "second": _brief_row(b)["required_skills_matched"]},
             "missing_first": [x["skill"] for x in a["breakdown"] if x["status"] == "missing"],

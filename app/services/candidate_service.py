@@ -12,11 +12,13 @@ from app.llm import client
 from app.llm.extraction import extract_profile
 from app.llm.jd_parsing import extract_job
 from app.llm.retrieval import chunk_text, pack
-from app.llm.scoring import ScoreResult, score_candidate
+from app.llm.scoring import (ScoreResult, default_cutoffs, default_weights_percent, effective_cutoffs, effective_weights, final_label,
+                             score_candidate, validate_cutoffs, validate_weights_percent, weighted_score)
 from app.llm.skill_canonicalizer import canonicalize_profile, canonicalize_skills, save_learned
 from app.llm.verification import verify_profile
 from app.models import CandidateProfile, JobProfile
 from app.parsing.document_extractor import extract_document
+from app.parsing.ocr import default_reader
 from app.services import dedupe
 from app.services.skill_normalizer import load_aliases
 
@@ -31,6 +33,7 @@ class Outcome:
     score: float | None = None
     recommendation: str | None = None
     verification_status: str | None = None
+    ocr_used: bool = False        # the resume was a scan and its text was read by OCR
 
 
 @contextmanager
@@ -58,7 +61,45 @@ def create_job(conn: sqlite3.Connection, text: str, canon_llm=None, jd_llm=None,
     res = extract_job(text, **_kw(jd_llm))
     if res.status != "ok":
         return None, res.error or "Could not understand the job description"
-    job = res.job
+    return _store_job(conn, res.job, text, canon_llm, owner_id)
+
+
+def build_job_text(job: JobProfile, responsibilities: str = "") -> str:
+    """Readable job description written from the answers of the job builder (kept as the job's raw text)."""
+    parts = [f"Job Title: {job.title}"]
+    if job.summary:
+        parts.append(f"About the role\n{job.summary}")
+    if responsibilities.strip():
+        parts.append(f"Responsibilities\n{responsibilities.strip()}")
+    parts.append("Requirements\n" + "\n".join(f"- {s}" for s in job.required_skills))
+    if job.preferred_skills:
+        parts.append("Nice to have\n" + "\n".join(f"- {s}" for s in job.preferred_skills))
+    if job.min_experience_years is not None:
+        parts.append(f"Experience: {job.min_experience_years:g}+ years" if job.min_experience_years else "Experience: freshers welcome")
+    if job.soft_skills:
+        parts.append("We value: " + ", ".join(job.soft_skills))
+    return "\n\n".join(parts)
+
+
+def skills_from_description(summary: str, responsibilities: str, jd_llm=None) -> tuple[list[str], list[str]]:
+    """Skills the recruiter described in words (summary and duties) but did not list, e.g. "deploy using Streamlit".
+    Returns ([], []) when there is no such text or the AI is unavailable: the typed skills are always kept."""
+    text = "\n".join(t.strip() for t in (summary, responsibilities) if t.strip())
+    if len(text) < 30:
+        return [], []
+    res = extract_job("Job Title: Role\n" + text, **_kw(jd_llm))
+    return (res.job.required_skills, res.job.preferred_skills) if res.status == "ok" else ([], [])
+
+
+def create_job_from_profile(conn: sqlite3.Connection, job: JobProfile, responsibilities: str = "", canon_llm=None,
+                            owner_id: int | None = None) -> tuple[int | None, str]:
+    """Store a job whose requirements the recruiter typed in directly (no AI reading step)."""
+    if not job.required_skills:
+        return None, "Add at least one required skill"
+    return _store_job(conn, job, build_job_text(job, responsibilities), canon_llm, owner_id)
+
+
+def _store_job(conn: sqlite3.Connection, job: JobProfile, text: str, canon_llm, owner_id: int | None) -> tuple[int | None, str]:
     aliases = load_aliases(conn)
     mapping, learned = canonicalize_skills(job.required_skills + job.preferred_skills, aliases, **_kw(canon_llm))
     with conn:
@@ -81,13 +122,79 @@ def get_job(conn: sqlite3.Connection, job_id: int) -> JobProfile | None:
     row = conn.execute("SELECT * FROM job_descriptions WHERE id=?", (job_id,)).fetchone()
     if row is None:
         return None
-    skills = conn.execute("SELECT skill_name, importance FROM job_required_skills WHERE job_description_id=? ORDER BY id",
+    skills = conn.execute("SELECT skill_name, importance, is_gate FROM job_required_skills WHERE job_description_id=? ORDER BY id",
                           (job_id,)).fetchall()
     return JobProfile(
+        gates=[r["skill_name"] for r in skills if r["is_gate"] and r["importance"] == "required"],
         title=row["title"], min_experience_years=row["min_experience_years"], summary=row["summary"],
         soft_skills=json.loads(row["soft_skills"] or "[]"),
         required_skills=[r["skill_name"] for r in skills if r["importance"] == "required"],
-        preferred_skills=[r["skill_name"] for r in skills if r["importance"] == "preferred"])
+        preferred_skills=[r["skill_name"] for r in skills if r["importance"] == "preferred"],
+        weights=json.loads(row["weights"]) if row["weights"] else None,
+        cutoffs=json.loads(row["cutoffs"]) if row["cutoffs"] else None)
+
+
+def set_job_gates(conn: sqlite3.Connection, job_id: int, skills: list[str]) -> dict:
+    """Mark which REQUIRED skills are must-haves and relabel every stored candidate. No AI call. Raises ValueError on unknown skills."""
+    job = get_job(conn, job_id)
+    by_lower = {s.lower(): s for s in job.required_skills}
+    chosen = []
+    for s in skills:
+        canon = by_lower.get(str(s).strip().lower())
+        if canon is None:
+            raise ValueError(f"'{s}' is not one of this job's required skills")
+        if canon not in chosen:
+            chosen.append(canon)
+    job.gates = chosen
+    with conn:
+        conn.execute("UPDATE job_required_skills SET is_gate = 0 WHERE job_description_id=?", (job_id,))
+        for s in chosen:
+            conn.execute("UPDATE job_required_skills SET is_gate = 1 WHERE job_description_id=? AND importance='required' AND skill_name=?", (job_id, s))
+        _relabel(conn, job, job_id)
+    return {"gates": chosen, "relabelled": conn.execute("SELECT COUNT(*) FROM analysis_results WHERE job_description_id=?", (job_id,)).fetchone()[0]}
+
+
+def _relabel(conn: sqlite3.Connection, job: JobProfile, job_id: int) -> int:
+    """Recompute every stored recommendation from the stored score, the job's cutoffs and its must-haves. Caller holds the transaction."""
+    rows = conn.execute("SELECT application_id, match_score, skill_breakdown FROM analysis_results WHERE job_description_id=?", (job_id,)).fetchall()
+    for r in rows:
+        conn.execute("UPDATE analysis_results SET recommendation=? WHERE application_id=?",
+                     (final_label(job, r["match_score"], json.loads(r["skill_breakdown"] or "[]")), r["application_id"]))
+    return len(rows)
+
+
+def set_job_cutoffs(conn: sqlite3.Connection, job_id: int, cutoffs: dict | None) -> dict:
+    """Save a job's Shortlist/Consider cutoffs (None resets) and relabel every stored score. No AI call. Raises ValueError."""
+    if cutoffs is not None:
+        cutoffs = validate_cutoffs(cutoffs)
+        if cutoffs == default_cutoffs():
+            cutoffs = None
+    job = get_job(conn, job_id)
+    job.cutoffs = cutoffs
+    with conn:
+        conn.execute("UPDATE job_descriptions SET cutoffs=? WHERE id=?", (json.dumps(cutoffs) if cutoffs else None, job_id))
+        relabelled = _relabel(conn, job, job_id)
+    return {"cutoffs": effective_cutoffs(job), "custom": cutoffs is not None, "relabelled": relabelled}
+
+
+def set_job_weights(conn: sqlite3.Connection, job_id: int, percent: dict | None) -> dict:
+    """Save a job's score weights (None resets to the defaults) and recompute every stored score from the stored component
+    scores. No AI call is made: only the final score and the recommendation change. Raises ValueError for invalid weights."""
+    if percent is not None:
+        percent = validate_weights_percent(percent)
+        if percent == default_weights_percent():
+            percent = None
+    job = get_job(conn, job_id)
+    job.weights = percent
+    weights = effective_weights(job)
+    with conn:
+        conn.execute("UPDATE job_descriptions SET weights=? WHERE id=?", (json.dumps(percent) if percent else None, job_id))
+        rows = conn.execute("SELECT application_id, component_scores, skill_breakdown FROM analysis_results WHERE job_description_id=?", (job_id,)).fetchall()
+        for r in rows:
+            score = weighted_score(json.loads(r["component_scores"] or "{}"), weights)
+            conn.execute("UPDATE analysis_results SET match_score=?, recommendation=? WHERE application_id=?",
+                         (score, final_label(job, score, json.loads(r["skill_breakdown"] or "[]")), r["application_id"]))
+    return {"weights": {k: round(v * 100, 1) for k, v in weights.items()}, "custom": percent is not None, "rescored": len(rows)}
 
 
 # ---------------------------------------------------------------- resumes
@@ -103,13 +210,24 @@ def _store_analysis(conn, app_id: int, job_id: int, s: ScoreResult) -> None:
          json.dumps(s.interview_questions), s.recommendation))
 
 
-def process_resume(conn: sqlite3.Connection, data: bytes, filename: str, job_id: int, *,
-                   extract_llm=None, verify_llm=None, canon_llm=None, score_llm=None, embed_llm=None) -> Outcome:
+def process_resume(conn: sqlite3.Connection, data: bytes, filename: str, job_id: int, **kwargs) -> Outcome:
+    """Run one resume through the whole pipeline (see _process_resume). Adds an 'OCR' note when the file was a scan."""
+    flag: list[bool] = []
+    outcome = _process_resume(conn, data, filename, job_id, _ocr_flag=flag, **kwargs)
+    if flag and flag[0]:
+        outcome.ocr_used = True
+        outcome.message = (outcome.message + " " if outcome.message else "") + "Read by OCR (scanned resume)."
+    return outcome
+
+
+def _process_resume(conn: sqlite3.Connection, data: bytes, filename: str, job_id: int, *, _ocr_flag: list,
+                    extract_llm=None, verify_llm=None, canon_llm=None, score_llm=None, embed_llm=None, ocr_llm=None) -> Outcome:
     job = get_job(conn, job_id)
     if job is None:
         return Outcome(filename, "rejected_file", f"Unknown job id {job_id}")
 
-    doc = extract_document(data, filename)
+    doc = extract_document(data, filename, ocr=ocr_llm or default_reader())      # OCR only ever runs for a PDF with no text layer
+    _ocr_flag.append(doc.ocr)
     if not doc.ok:
         return Outcome(filename, "rejected_file", doc.message)
 

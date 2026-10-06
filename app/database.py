@@ -21,6 +21,8 @@ CREATE TABLE IF NOT EXISTS job_descriptions (
     min_experience_years REAL,
     soft_skills TEXT,
     summary TEXT,
+    weights TEXT,                                -- JSON {"skills": 70, ...} in percent when the recruiter changed them; NULL = defaults
+    cutoffs TEXT,                                -- JSON {"shortlist": 70, "consider": 45} when the recruiter changed them; NULL = defaults
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -28,6 +30,7 @@ CREATE TABLE IF NOT EXISTS job_required_skills (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     job_description_id INTEGER NOT NULL REFERENCES job_descriptions(id) ON DELETE CASCADE,
     skill_name TEXT NOT NULL,
+    is_gate INTEGER NOT NULL DEFAULT 0,           -- 1 = must-have: a candidate missing it cannot be labelled Shortlist
     importance TEXT NOT NULL DEFAULT 'required'   -- required | preferred
 );
 
@@ -196,6 +199,12 @@ def init_db() -> None:
             conn.execute("ALTER TABLE users ADD COLUMN session_epoch INTEGER NOT NULL DEFAULT 0")
         if "owner_id" not in {r[1] for r in conn.execute("PRAGMA table_info(job_descriptions)")}:     # database created before jobs had owners
             conn.execute("ALTER TABLE job_descriptions ADD COLUMN owner_id INTEGER")
+        if "weights" not in {r[1] for r in conn.execute("PRAGMA table_info(job_descriptions)")}:      # database created before per-job weights
+            conn.execute("ALTER TABLE job_descriptions ADD COLUMN weights TEXT")
+        if "is_gate" not in {r[1] for r in conn.execute("PRAGMA table_info(job_required_skills)")}:      # database created before must-haves
+            conn.execute("ALTER TABLE job_required_skills ADD COLUMN is_gate INTEGER NOT NULL DEFAULT 0")
+        if "cutoffs" not in {r[1] for r in conn.execute("PRAGMA table_info(job_descriptions)")}:      # database created before per-job cutoffs
+            conn.execute("ALTER TABLE job_descriptions ADD COLUMN cutoffs TEXT")
         conn.executemany(
             "INSERT OR IGNORE INTO skill_aliases (alias, canonical) VALUES (?, ?)",
             SEED_ALIASES.items(),

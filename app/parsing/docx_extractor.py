@@ -54,6 +54,13 @@ def extract_docx(data: bytes, filename: str) -> ExtractionResult:
                 hidden.append(gone)
             if visible:
                 lines.append(visible)
+    # A link shown only as a label ("Portfolio") hides its address; add targets the visible text lacks (same idea as the PDF reader).
+    body = "\n".join(lines).lower()
+    links = [r.target_ref.removeprefix("mailto:").removeprefix("tel:") for r in doc.part.rels.values()
+             if r.reltype.endswith("/hyperlink") and r.is_external and r.target_ref]
+    missing = [u for u in dict.fromkeys(links) if u.split("://")[-1].removeprefix("www.").rstrip("/").lower() not in body]
+    if missing:
+        lines.append("Links: " + "  ".join(missing))
     text = "\n".join(lines)
 
     if len(text) < MIN_TEXT_CHARS:

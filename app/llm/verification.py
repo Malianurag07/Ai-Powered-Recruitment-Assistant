@@ -56,17 +56,49 @@ def quote_in_text(quote: str | None, text: str) -> bool:
     return bool(quote) and len(quote.strip()) >= 3 and _collapse(quote) in _collapse(text)
 
 
+# A skill the resume only mentions to say the candidate lacks it ("no experience with Docker", "currently learning Docker")
+# is not a skill they have. The cue must sit right before the skill, so "no downtime using Docker" is not read as a negation.
+_FILLER = r"(?:(?:any|prior|previous|hands-on|practical|professional|direct|real|much|formal|work|commercial)\s+)*"
+_ABOUT = r"(?:(?:experience|knowledge|exposure|familiarity|background|understanding|expertise)\s+(?:with|in|of|using|on|to)\s+)?(?:(?:the|a|an|any)\s+)?"
+_NEGATED_BEFORE = re.compile(
+    r"(?:\bno|\bzero|\bwithout|\bnever\s+(?:used|worked(?:\s+with)?|touched)|\bnot\s+(?:familiar|experienced|proficient|comfortable)(?:\s+(?:with|in))?"
+    r"|\bunfamiliar\s+with|\black(?:s|ing)?(?:\s+of)?|\b(?:haven'?t|have\s+not|hasn'?t|has\s+not)\s+(?:used|worked(?:\s+with)?))\s+"
+    + _FILLER + _ABOUT + r"$"
+    r"|(?:\blearning|\b(?:want|wants|plan|plans|hope|hopes|wish|aim)(?:ing)?\s+to\s+learn|\b(?:starting|beginning|yet)\s+to\s+learn)\s+(?:(?:the|about|of)\s+)?$",
+    re.I)
+
+
+def _mentioned_positively(form: str, text: str) -> bool | None:
+    """True/False if the form is found (as a whole word) with/without a non-negated mention; None if it cannot be located."""
+    parts = [re.escape(p) for p in re.split(r"[^A-Za-z0-9+#]+", form) if p]
+    if not parts:
+        return None
+    found = False
+    for m in re.finditer(r"(?<![A-Za-z0-9])" + r"[\W_]*".join(parts) + r"(?![A-Za-z0-9])", text, re.I):
+        found = True
+        before = re.split(r"[.;\n|•]", text[max(0, m.start() - 80):m.start()])[-1]
+        if not _NEGATED_BEFORE.search(re.sub(r"\bnot\s+only\b", "also", before + "", flags=re.I)):
+            return True
+    return False if found else None
+
+
 def skill_in_text(skill: str, text: str, aliases: dict[str, str]) -> bool:
-    """True if the skill (or a known alias of it) appears in the text, ignoring case and punctuation."""
+    """True if the skill (or a known alias of it) appears in the text, ignoring case and punctuation.
+    A skill that is only mentioned as missing or being learned does not count."""
     forms = {skill} | {a for a, c in aliases.items() if c.lower() == skill.lower()}
     low = text.lower()
+    present, verdicts = False, []
     for f in forms:
         if len(_alnum(f)) >= 3:
-            if _alnum(f) in _alnum(text):
-                return True
-        elif re.search(rf"(?<![a-z0-9]){re.escape(f.lower())}(?![a-z0-9])", low):
-            return True  # very short skills (e.g. "C") need word boundaries to avoid false hits
-    return False
+            hit = _alnum(f) in _alnum(text)
+        else:
+            hit = bool(re.search(rf"(?<![a-z0-9]){re.escape(f.lower())}(?![a-z0-9])", low))   # very short skills (e.g. "C") need word boundaries
+        if hit:
+            present = True
+            verdicts.append(_mentioned_positively(f, text))
+    if not present:
+        return False
+    return not verdicts or True in verdicts or all(v is None for v in verdicts)
 
 
 # ---------- stage 1 ----------

@@ -24,6 +24,7 @@
     <nav class="ml-6 hidden items-center gap-6 text-sm md:flex" style="color:var(--muted)" aria-label="Main">
       <a class="hover:text-white" href="#/jobs">Jobs</a>
       <a class="hover:text-white" id="navResults" href="#/jobs">Results</a>
+      <a class="hover:text-white" href="#/extract">Text check</a>
     </nav>
     <div class="ml-auto flex items-center gap-2.5">
       <div id="userMenu" class="flex items-center gap-2" hidden></div>
@@ -56,6 +57,21 @@
   </form>
 </section>
 
+<!-- ================================================================ TEXT CHECK -->
+<section data-view="extract" hidden class="mx-auto max-w-4xl px-5 pb-24 pt-10">
+  <span class="eyebrow">Text check</span>
+  <h1 class="h-display mt-3 text-[30px] md:text-[38px]">See what the reader <b>extracts</b></h1>
+  <p class="mt-2 max-w-xl text-sm" style="color:var(--muted)">Choose a resume or job description (PDF, DOCX or TXT) to see the exact text the software reads from it. Nothing is saved. No AI is used, except to read a scanned PDF that has no text layer (OCR), so you can check that nothing is missing.</p>
+  <div class="card mt-7 p-5">
+    <div class="flex flex-wrap items-center gap-3">
+      <label class="btn btn-ghost btn-sm cursor-pointer">Choose a file<input id="exFile" type="file" accept=".pdf,.docx,.txt" class="hidden"></label>
+      <span id="exName" class="mono text-xs" style="color:var(--muted)"></span>
+      <button id="exBtn" class="btn btn-primary btn-sm ml-auto" type="button">Extract text</button>
+    </div>
+  </div>
+  <div id="exOut" class="mt-5 hidden"></div>
+</section>
+
 <!-- ================================================================ USERS (admins only) -->
 <section data-view="users" hidden class="mx-auto max-w-5xl px-5 pb-24 pt-10">
   <span class="eyebrow">Administration</span>
@@ -83,7 +99,7 @@
         Choose a job, drop in a stack of resumes, and get a ranked shortlist where every score can be explained. Then just ask questions about your candidates.
       </p>
       <div class="mt-9 flex flex-wrap justify-center gap-3">
-        <a href="#/jobs" class="btn btn-primary">Start screening →</a>
+        <a href="#/jobs" id="homeStart" class="btn btn-primary">Start screening →</a>
         <a href="#/jobs" id="homeLatest" class="btn btn-ghost">Open latest results</a>
       </div>
     </div>
@@ -119,12 +135,42 @@
       <div id="jobGrid" class="grid gap-3"></div>
     </div>
     <div class="card p-6 self-start">
-      <div class="flex items-center justify-between"><h3 class="text-lg font-semibold">Add a new job</h3><span class="mono text-[11px]" style="color:var(--faint)">PDF · DOCX · TXT · paste</span></div>
+      <div class="flex items-center justify-between"><h3 class="text-lg font-semibold">Add a new job</h3></div>
+      <div class="mt-3 flex gap-2" role="tablist" aria-label="How to add the job">
+        <button class="tab on" type="button" data-jdmode="paste" role="tab">Paste or upload</button>
+        <button class="tab" type="button" data-jdmode="build" role="tab">Build with questions</button>
+      </div>
+      <div id="jdBuild" class="mt-4 hidden">
+        <label class="block text-sm font-medium" for="jbTitle">What is the job title?</label>
+        <input id="jbTitle" class="field mt-1.5" maxlength="120" placeholder="e.g. Java Developer Intern">
+        <label class="mt-4 block text-sm font-medium" for="jbSummary">What will this person do? <span style="color:var(--faint)">(short summary, optional)</span></label>
+        <textarea id="jbSummary" rows="2" maxlength="1000" class="field mt-1.5 resize-y" placeholder="One or two sentences about the role"></textarea>
+        <label class="mt-4 block text-sm font-medium">Which skills are must-haves?</label>
+        <div class="chips field mt-1.5" data-chips="jbRequired" data-ph="Type a skill, press Enter"></div>
+        <label class="mt-4 block text-sm font-medium">Which skills are nice to have?</label>
+        <div class="chips field mt-1.5" data-chips="jbPreferred" data-ph="Type a skill, press Enter"></div>
+        <div class="mt-4 grid gap-4 sm:grid-cols-2">
+          <div><label class="block text-sm font-medium" for="jbEdu">Required degree or qualification?</label>
+            <input id="jbEdu" class="field mt-1.5" maxlength="100" placeholder="e.g. Bachelor's degree in Computer Science"></div>
+          <div><label class="block text-sm font-medium" for="jbYears">Minimum years of experience?</label>
+            <input id="jbYears" class="field mt-1.5" type="number" min="0" max="50" step="0.5" placeholder="0 for freshers"></div>
+        </div>
+        <label class="mt-4 block text-sm font-medium">Any deal-breakers? <span style="color:var(--faint)">(optional)</span></label>
+        <div class="chips field mt-1.5" data-chips="jbGates" data-ph="Must-have skill, press Enter"></div>
+        <p class="mt-1.5 text-[12px]" style="color:var(--muted)">A <b>must-have</b> is a skill a candidate cannot be shortlisted without. If a resume lacks it, they are held at Consider whatever their score, and the missing must-have is shown next to their name.</p>
+        <label class="mt-4 block text-sm font-medium" for="jbResp">Main responsibilities <span style="color:var(--faint)">(optional, one per line)</span></label>
+        <textarea id="jbResp" rows="3" maxlength="4000" class="field mt-1.5 resize-y"></textarea>
+        <label class="mt-4 block text-sm font-medium">Soft skills that matter? <span style="color:var(--faint)">(optional)</span></label>
+        <div class="chips field mt-1.5" data-chips="jbSoft" data-ph="e.g. Teamwork"></div>
+        <button id="buildJobBtn" class="btn btn-primary mt-5 w-full" type="button">Create job</button>
+      </div>
+      <div id="jdPaste">
       <textarea id="jdText" rows="7" class="field mt-4 resize-y" placeholder="Paste the job description here…"></textarea>
       <div class="mt-3 flex flex-wrap items-center gap-3">
         <label class="btn btn-ghost btn-sm cursor-pointer">Choose a file<input id="jdFile" type="file" accept=".pdf,.docx,.txt" class="hidden"></label>
         <span id="jdFileName" class="mono text-xs" style="color:var(--muted)"></span>
         <button id="createJobBtn" class="btn btn-primary ml-auto">Analyse job</button>
+      </div>
       </div>
     </div>
   </div>
@@ -145,6 +191,12 @@
       <p class="mono mt-1 text-xs" style="color:var(--muted)">PDF or DOCX · several at once · up to 10 MB each</p>
       <input id="resumeInput" type="file" multiple accept=".pdf,.docx" class="hidden">
     </div>
+    <div class="mt-3 flex flex-wrap items-center gap-3">
+      <button id="folderBtn" class="btn btn-ghost btn-sm" type="button">Choose a folder</button>
+      <input id="folderInput" type="file" webkitdirectory multiple class="hidden">
+      <span class="mono text-[11.5px]" style="color:var(--muted)">Every PDF and Word file inside the folder (and its sub-folders) is analysed one after another. You can also drop a folder above.</span>
+    </div>
+    <div id="batchPlan" class="card mt-4 hidden p-5" role="region" aria-live="polite" aria-label="Free-tier estimate"></div>
     <ul id="uploadList" class="mt-4 space-y-2"></ul>
     <div id="uploadDone" class="mt-5 hidden items-center justify-between gap-4 rounded-2xl border p-4" style="border-color:rgba(95,208,138,.25);background:rgba(95,208,138,.06)">
       <div><div class="font-medium" id="uploadDoneTitle"></div><div class="text-[13px]" style="color:var(--muted)">Opening the ranking…</div></div>
@@ -163,13 +215,25 @@
       <h2 class="h-display mt-4 text-[28px] md:text-[40px]" id="resultsTitle">Ranking</h2>
     </div>
     <div class="flex flex-wrap gap-2">
-      <a id="addMore" class="btn btn-ghost btn-sm" href="#/jobs">+ Add resumes</a>
+      <button id="addMore" class="btn btn-primary btn-sm" type="button" aria-expanded="false" aria-controls="quickUpload">+ Upload more resumes</button>
       <a class="btn btn-ghost btn-sm" href="#/jobs">Change job</a>
       <a id="exportBtn" class="btn btn-ghost btn-sm" href="#">Export CSV</a>
       <a id="exportXlsx" class="btn btn-ghost btn-sm" href="#">Export Excel</a>
+      <button id="weightsBtn" class="btn btn-ghost btn-sm" type="button">Score settings</button>
     </div>
   </div>
 
+  <div id="quickUpload" class="card mt-6 hidden p-5" role="region" aria-label="Upload more resumes">
+    <div class="flex flex-wrap items-center gap-3">
+      <label class="btn btn-primary btn-sm cursor-pointer">Choose resumes<input id="quickFiles" type="file" multiple accept=".pdf,.docx" class="hidden"></label>
+      <button id="quickFolderBtn" class="btn btn-ghost btn-sm" type="button">Choose a folder</button>
+      <input id="quickFolder" type="file" webkitdirectory multiple class="hidden">
+      <span class="mono text-[11.5px]" style="color:var(--muted)">PDF or Word. Each resume is analysed and the ranking below updates when the batch finishes.</span>
+      <button id="quickClose" class="btn btn-ghost btn-sm ml-auto" type="button">Close</button>
+    </div>
+    <div id="quickPlan" class="card mt-4 hidden p-5" role="region" aria-live="polite" aria-label="Free-tier estimate"></div>
+    <ul id="quickList" class="mt-4 space-y-2"></ul>
+  </div>
   <div id="heroStats" class="mt-6 grid grid-cols-2 gap-3 md:grid-cols-4">
     <div class="card px-5 py-4"><div class="text-[28px] font-semibold tracking-tight" id="statScored">–</div><div class="text-[12.5px]" style="color:var(--muted)">Candidates scored</div></div>
     <div class="card px-5 py-4"><div class="text-[28px] font-semibold tracking-tight" id="statShort">–</div><div class="text-[12.5px]" style="color:var(--muted)">Shortlisted</div></div>
@@ -217,7 +281,7 @@
   </div>
 
   <!-- Data -->
-  <div class="mt-16">
+  <div class="mt-16" id="dbSection" hidden>
     <span class="eyebrow">What was stored</span>
     <h3 class="h-display mt-3 text-[24px] md:text-[30px]">Every result is saved <b>in the database.</b></h3>
     <p class="mt-2 max-w-xl text-sm" style="color:var(--muted)">Read-only view of the SQLite tables behind this page, including the log of automatic corrections.</p>

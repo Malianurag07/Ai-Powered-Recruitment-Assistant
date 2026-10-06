@@ -14,7 +14,7 @@ const store = {
 // Resumes often print names in ALL CAPS ("JEEVAN RAJ M"); show them consistently in normal case.
 const nice = (n) => (n && n === n.toUpperCase() ? n.toLowerCase().replace(/(^|\s)\p{L}/gu, (m) => m.toUpperCase()) : n || "");
 const recClass = (r) => `rec-${r}`;
-const barClass = (s) => (s >= 70 ? "good" : s >= 45 ? "warn" : "bad");
+const barClass = (s) => { const c = state.job?.cutoffs || { shortlist: 70, consider: 45 }; return s >= c.shortlist ? "good" : s >= c.consider ? "warn" : "bad"; };
 const fmt1 = (n) => (n == null ? "–" : Number(n).toFixed(1));
 
 async function api(path, opts = {}) {
@@ -57,8 +57,8 @@ async function route() {
   closeDrawer(); closeModal();
   const [view = "home", arg] = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
   const id = Number(arg) || null;
-  let name = ["home", "jobs", "upload", "results", "login", "users"].includes(view) ? view : "home";
-  if (state.auth.enabled && !state.auth.user && name !== "login") { location.hash = "#/login"; return; }
+  let name = ["home", "jobs", "upload", "results", "login", "users", "extract"].includes(view) ? view : "home";
+  if (state.auth.enabled && !state.auth.user && name !== "login" && name !== "home") { location.hash = "#/login"; return; }   // signed-out visitors may read the home page
   if (name === "login" && (!state.auth.enabled || state.auth.user)) { location.hash = "#/jobs"; return; }
   if (name === "users" && state.auth.user?.role !== "admin") { toast("Only admins can manage users"); location.hash = "#/jobs"; return; }
 
@@ -85,8 +85,11 @@ async function selectJob(id) {
 }
 
 function updateChrome() {
-  const signedOut = state.auth.enabled && !state.auth.user;              // on the login screen: hide everything but the logo
-  $$("header nav, #startBtn").forEach((el) => el.classList.toggle("!hidden", signedOut));
+  const signedOut = state.auth.enabled && !state.auth.user;              // signed out: no menu, and the buttons lead to sign-in
+  $("header nav").classList.toggle("!hidden", signedOut);
+  $("#startBtn").textContent = signedOut ? "Sign in" : "Start screening";
+  $("#startBtn").href = $("#homeStart").href = signedOut ? "#/login" : "#/jobs";
+  $("#homeStart").textContent = signedOut ? "Sign in to start →" : "Start screening →";
   renderUserMenu();
   const pill = $("#jobPill");
   if (state.job && state.jobId) { pill.hidden = false; pill.textContent = `#${state.jobId} · ${state.job.title || "Untitled job"}`; pill.href = `#/results/${state.jobId}`; }
@@ -109,7 +112,7 @@ $("#userMenu").addEventListener("click", async (e) => {
   const act = e.target.closest("[data-act]")?.dataset.act;
   if (act === "logout") {
     try { await api("/api/auth/logout", { method: "POST" }); } catch { /* already signed out */ }
-    state.auth.user = null; state.jobId = null; state.job = null; updateChrome(); location.hash = "#/login";
+    state.auth.user = null; state.jobId = null; state.job = null; updateChrome(); location.hash = "#/";
   }
   if (act === "password") openPasswordModal();
 });
@@ -213,6 +216,7 @@ $("#userRows").addEventListener("click", async (e) => {
 
 // ---------------------------------------------------------------- home
 async function renderHome() {
+  if (state.auth.enabled && !state.auth.user) { $("#homeLatest").hidden = true; return; }
   try { state.jobs = await api("/api/jobs"); } catch { return; }
   const latest = state.jobs.find((j) => j.scored > 0);
   const link = $("#homeLatest");
@@ -221,6 +225,22 @@ async function renderHome() {
 }
 
 // ---------------------------------------------------------------- step 1: choose a job
+// Asks "are you sure?" in the modal; runs onYes only after an explicit click on the red button.
+function confirmDelete(title, detail, onYes) {
+  const body = $("#modalBody");
+  body.className = "card p-6";
+  body.innerHTML = `<div class="eyebrow">Delete</div><h2 class="h-display mt-2 text-[22px]">${esc(title)}</h2>
+    <p class="mt-3 text-sm" style="color:var(--muted)">${esc(detail)} This cannot be undone.</p>
+    <div class="mt-6 flex justify-end gap-2"><button class="btn btn-ghost btn-sm" type="button" id="delNo">Cancel</button>
+    <button class="btn btn-sm" type="button" id="delYes" style="background:var(--bad);color:#fff">Delete</button></div>`;
+  $("#modal").classList.add("open");
+  $("#delNo").onclick = closeModal; $("#delNo").focus();
+  $("#delYes").onclick = async (e) => {
+    e.currentTarget.disabled = true;
+    try { await onYes(); closeModal(); } catch (err) { closeModal(); toast(err.message); }
+  };
+}
+
 async function renderJobs() {
   state.jobs = await api("/api/jobs");
   const grid = $("#jobGrid");
@@ -234,11 +254,88 @@ async function renderJobs() {
       <div class="min-w-0 flex-1"><div class="truncate text-[16px] font-semibold">${esc(j.title || "Untitled job")}</div>
         <div class="mono mt-1 text-[11.5px]" style="color:var(--muted)">#${j.id} · ${j.scored} candidate${j.scored === 1 ? "" : "s"}${j.pending ? ` · ${j.pending} awaiting choice` : ""}${date ? ` · added ${esc(date)}` : ""}${j.owner ? ` · by ${esc(j.owner)}` : ""}</div></div>
       ${j.scored ? `<a class="btn btn-ghost btn-sm" href="#/results/${j.id}">View ranking</a>` : ""}
+      <button class="btn btn-ghost btn-sm" type="button" data-deljob="${j.id}" aria-label="Delete job ${esc(j.title || "Untitled job")}" style="color:var(--bad)">Delete</button>
       <a class="btn btn-primary btn-sm" href="#/upload/${j.id}">Screen resumes →</a></div>`;
   }).join("");
 }
 
 $("#jdFile").addEventListener("change", (e) => { $("#jdFileName").textContent = e.target.files[0]?.name || ""; });
+
+// ---------------------------------------------------------------- text check: show what the reader extracts from a file
+$("#exFile").addEventListener("change", (e) => { $("#exName").textContent = e.target.files[0]?.name || ""; });
+$("#exBtn").addEventListener("click", async (e) => {
+  const file = $("#exFile").files[0];
+  if (!file) return toast("Choose a file first");
+  const btn = e.currentTarget, out = $("#exOut"); btn.disabled = true;
+  const fd = new FormData(); fd.append("file", file);
+  try {
+    const r = await api("/api/extract-preview", { method: "POST", body: fd });
+    const ok = r.status === "ok";
+    out.innerHTML = `<div class="card p-5"><div class="mono flex flex-wrap gap-x-5 gap-y-1 text-[12px]" style="color:var(--muted)">
+        <span>${esc(r.filename)}</span><span>status: <b style="color:${ok ? "var(--good)" : "var(--bad)"}">${esc(r.status)}</b></span>
+        <span>${r.chars.toLocaleString()} characters</span>${r.pages ? `<span>${r.pages} page${r.pages === 1 ? "" : "s"}</span>` : ""}</div>
+      ${r.message ? `<p class="mt-3 text-sm" style="color:${ok ? "var(--warn)" : "var(--bad)"}">${esc(r.message)}</p>` : ""}
+      ${r.hidden_text ? `<p class="mt-3 text-sm" style="color:var(--warn)">Hidden text was ignored (white or microscopic): ${esc(r.hidden_text.slice(0, 300))}</p>` : ""}
+      <pre class="mono mt-4 max-h-[60vh] overflow-auto whitespace-pre-wrap rounded-lg p-4 text-[12.5px]" style="background:rgba(255,255,255,.04);border:1px solid var(--line)">${esc(r.text) || "(no text extracted)"}</pre></div>`;
+    out.classList.remove("hidden");
+  } catch (err) { toast(err.message); }
+  btn.disabled = false;
+});
+
+// ---------------------------------------------------------------- job builder: answer questions instead of pasting a description
+const chipValues = {};                                           // chip-input id -> list of strings
+$$("[data-chips]").forEach((box) => {
+  const id = box.dataset.chips, list = (chipValues[id] = []);
+  const input = document.createElement("input"); input.placeholder = box.dataset.ph || ""; input.maxLength = 60; input.setAttribute("aria-label", box.dataset.ph || id);
+  const draw = () => {
+    box.querySelectorAll(".chip").forEach((c) => c.remove());
+    list.forEach((v, i) => { const c = document.createElement("span"); c.className = "chip"; c.innerHTML = `${esc(v)}<button type="button" aria-label="Remove ${esc(v)}" data-i="${i}">×</button>`; box.insertBefore(c, input); });
+  };
+  const add = () => { input.value.split(",").map((s) => s.trim()).filter(Boolean).forEach((v) => { if (!list.some((x) => x.toLowerCase() === v.toLowerCase())) list.push(v); }); input.value = ""; draw(); };
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === ",") { e.preventDefault(); add(); }
+    else if (e.key === "Backspace" && !input.value && list.length) { list.pop(); draw(); }
+  });
+  input.addEventListener("blur", add);
+  box.addEventListener("click", (e) => { const b = e.target.closest("button[data-i]"); if (b) { list.splice(Number(b.dataset.i), 1); draw(); } else input.focus(); });
+  box.appendChild(input); box._add = add; box._reset = () => { list.length = 0; input.value = ""; draw(); };
+});
+
+$$("[data-jdmode]").forEach((tab) => tab.addEventListener("click", () => {
+  const build = tab.dataset.jdmode === "build";
+  $$("[data-jdmode]").forEach((t) => t.classList.toggle("on", t === tab));
+  $("#jdBuild").classList.toggle("hidden", !build); $("#jdPaste").classList.toggle("hidden", build);
+}));
+
+$("#buildJobBtn").addEventListener("click", async (e) => {
+  $$("[data-chips]").forEach((b) => b._add());                    // pick up a skill typed but not yet confirmed with Enter
+  const title = $("#jbTitle").value.trim();
+  if (!title) return toast("Give the job a title");
+  if (!chipValues.jbRequired.length) return toast("Add at least one must-have skill");
+  const yrs = $("#jbYears").value;
+  const btn = e.currentTarget; btn.disabled = true; btn.innerHTML = `<span class="spin"></span> Creating job…`;
+  try {
+    const job = await api("/api/jobs/build", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
+      title, summary: $("#jbSummary").value, responsibilities: $("#jbResp").value, required_skills: chipValues.jbRequired, gate_skills: chipValues.jbGates,
+      preferred_skills: chipValues.jbPreferred, education: $("#jbEdu").value, min_experience_years: yrs === "" ? null : Number(yrs),
+      soft_skills: chipValues.jbSoft }) });
+    ["#jbTitle", "#jbSummary", "#jbResp", "#jbEdu", "#jbYears"].forEach((s) => ($(s).value = ""));
+    $$("[data-chips]").forEach((b) => b._reset());
+    toast(`Job added: ${job.title}`);
+    location.hash = `#/upload/${job.id}`;
+  } catch (err) { toast(err.message); }
+  btn.disabled = false; btn.textContent = "Create job";
+});
+
+$("#jobGrid").addEventListener("click", (e) => {
+  const id = Number(e.target.closest("[data-deljob]")?.dataset.deljob); if (!id) return;
+  const j = state.jobs.find((x) => x.id === id);
+  confirmDelete(`Delete "${j?.title || "this job"}"?`, `The job and its ${j?.scored || 0} scored resume(s), chat history and results will be removed.`, async () => {
+    await api(`/api/jobs/${id}`, { method: "DELETE" });
+    if (state.jobId === id) { state.jobId = null; state.job = null; store.set("jobId", ""); }
+    toast("Job deleted"); updateChrome(); await renderJobs();
+  });
+});
 
 $("#createJobBtn").addEventListener("click", async (e) => {
   const text = $("#jdText").value.trim(), file = $("#jdFile").files[0];
@@ -278,8 +375,58 @@ dz.addEventListener("click", () => input.click());
 dz.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); input.click(); } });
 ["dragenter", "dragover"].forEach((ev) => dz.addEventListener(ev, (e) => { e.preventDefault(); dz.classList.add("over"); }));
 ["dragleave", "drop"].forEach((ev) => dz.addEventListener(ev, (e) => { e.preventDefault(); dz.classList.remove("over"); }));
-dz.addEventListener("drop", (e) => uploadFiles([...e.dataTransfer.files]));
-input.addEventListener("change", () => { uploadFiles([...input.files]); input.value = ""; });
+dz.addEventListener("drop", async (e) => planAndUpload(await collectDropped(e.dataTransfer)));
+input.addEventListener("change", () => { planAndUpload({ files: [...input.files], skipped: 0 }); input.value = ""; });
+$("#folderBtn").addEventListener("click", () => $("#folderInput").click());
+$("#folderInput").addEventListener("change", (e) => { planAndUpload(pickResumes([...e.target.files])); e.target.value = ""; });
+
+// ---- folder upload: keep only PDF/DOCX from a folder (any depth) and say how many other files were left out
+const isResume = (f) => /\.(pdf|docx)$/i.test(f.name) && !f.name.startsWith("~$");
+const pickResumes = (all) => ({ files: all.filter(isResume), skipped: all.filter((f) => !isResume(f) && !f.name.startsWith(".")).length });
+
+async function collectDropped(dt) {
+  const entries = [...(dt.items || [])].map((i) => i.webkitGetAsEntry?.()).filter(Boolean);
+  if (!entries.some((en) => en.isDirectory)) return { files: [...dt.files], skipped: 0 };      // plain files: unchanged behaviour
+  const all = [];
+  const walk = async (en) => {
+    if (en.isFile) all.push(await new Promise((res, rej) => en.file(res, rej)));
+    else {
+      const rd = en.createReader(); let batch;
+      do { batch = await new Promise((res, rej) => rd.readEntries(res, rej)); for (const child of batch) await walk(child); } while (batch.length);
+    }
+  };
+  for (const en of entries) await walk(en);
+  return pickResumes(all);
+}
+
+// ---- before a batch of 3 or more: show what it needs versus the free-tier calls left, then let the user decide
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const UP_PAGE = { list: "#uploadList", plan: "#batchPlan", quick: false };        // the upload step
+const UP_QUICK = { list: "#quickList", plan: "#quickPlan", quick: true };         // the panel on the ranking page
+async function planAndUpload({ files, skipped }, ui = UP_PAGE) {
+  const plan = $(ui.plan); plan.classList.add("hidden");
+  if (!files.length) return toast(skipped ? `No PDF or Word files found (${skipped} other file${skipped === 1 ? "" : "s"} skipped)` : "No files chosen");
+  if (files.length < 3 && !skipped) return uploadFiles(files, ui);
+  let est;
+  plan.innerHTML = `<span class="spin"></span> Checking how many free AI calls are left…`; plan.classList.remove("hidden");
+  try { est = await api(`/api/quota/estimate?count=${files.length}`); } catch { plan.classList.add("hidden"); return uploadFiles(files, ui); }
+  const tone = { ok: "var(--good)", tight: "var(--warn)", over: "var(--bad)" }[est.verdict];
+  const text = { ok: "Everything should fit within today's free limits.", tight: "This will use most of what is left today. It should fit, but little room remains.",
+    over: `This is more than today's free limits allow. About ${est.max_resumes_now} resume${est.max_resumes_now === 1 ? "" : "s"} can be done now; the rest would fail or have to wait until the limits reset.` }[est.verdict];
+  plan.innerHTML = `<div class="flex flex-wrap items-baseline justify-between gap-2"><h3 class="text-[17px] font-semibold">${files.length} resume${files.length === 1 ? "" : "s"} ready${skipped ? ` <span class="mono text-[12px] font-normal" style="color:var(--muted)">· ${skipped} other file${skipped === 1 ? "" : "s"} skipped (not PDF or Word)</span>` : ""}</h3>
+      <span class="mono text-[12px]" style="color:var(--muted)">about ${est.calls_total} AI calls · roughly ${est.minutes} min · ${est.pause_seconds}s pause between resumes</span></div>
+    <p class="mt-2 text-sm" style="color:${tone}">${esc(text)}</p>
+    <table class="mt-3 w-full text-[12.5px]"><thead><tr class="mono text-left" style="color:var(--faint)"><th class="py-1">Provider</th><th>Needs</th><th>Left today</th><th>Source</th></tr></thead><tbody>
+      ${est.rows.map((r) => `<tr><td class="py-1">${esc(r.name)}</td><td>${r.needs}</td><td style="color:${r.left < r.needs ? "var(--bad)" : "inherit"}">${r.left} of ${r.limit}</td><td style="color:var(--muted)">${esc(r.source)}</td></tr>`).join("")}</tbody></table>
+    <p class="mono mt-2 text-[11px]" style="color:var(--faint)">Groq reports its own remaining count. Google does not, so its figure is this app's own count against a limit set in .env (an estimate).</p>
+    <div class="mt-4 flex flex-wrap justify-end gap-2"><button class="btn btn-ghost btn-sm" type="button" id="planNo">Cancel</button>
+      ${est.verdict === "over" && est.max_resumes_now > 0 ? `<button class="btn btn-primary btn-sm" type="button" id="planFirst">Process the first ${est.max_resumes_now} now</button>` : ""}
+      <button class="btn ${est.verdict === "over" ? "btn-ghost" : "btn-primary"} btn-sm" type="button" id="planAll">${est.verdict === "over" ? "Process all anyway" : "Start"}</button></div>`;
+  const go = (list) => { plan.classList.add("hidden"); uploadFiles(list, ui); };
+  $("#planNo", plan).onclick = () => plan.classList.add("hidden");
+  $("#planAll", plan).onclick = () => go(files);
+  if ($("#planFirst", plan)) $("#planFirst", plan).onclick = () => go(files.slice(0, est.max_resumes_now));
+}
 
 const OUTCOME = {
   stored: (o) => ({ cls: `rec-${o.recommendation}`, label: `${o.recommendation} · ${fmt1(o.score)}` }),
@@ -289,13 +436,13 @@ const OUTCOME = {
   rejected_file: () => ({ cls: "rec-Reject", label: "Rejected" }),
 };
 
-async function uploadFiles(files) {
+async function uploadFiles(files, ui = UP_PAGE) {
   if (!state.jobId) return toast("Choose a job first");
   if (state.busy) return toast("Still processing the previous batch");
   if (!files.length) return;
   state.busy = true;
-  const list = $("#uploadList");
-  $("#uploadDone").classList.add("hidden"); $("#uploadDone").classList.remove("flex");
+  const list = $(ui.list);
+  if (!ui.quick) { $("#uploadDone").classList.add("hidden"); $("#uploadDone").classList.remove("flex"); }
   const rows = files.map((f) => {
     const li = document.createElement("li");
     li.className = "rounded-2xl border px-4 py-3"; li.style.borderColor = "var(--line)";
@@ -307,16 +454,33 @@ async function uploadFiles(files) {
     const st = $(".st", rows[i]), sub = $(".sub", rows[i]);
     st.innerHTML = `<span class="spin"></span> reading, checking, scoring…`;
     const fd = new FormData(); fd.append("files", files[i]);
+    let pause = 0, stop = null;
     try {
-      const { outcomes } = await api(`/api/jobs/${state.jobId}/resumes`, { method: "POST", body: fd });
+      const { outcomes, pause_seconds, out_of_calls } = await api(`/api/jobs/${state.jobId}/resumes`, { method: "POST", body: fd });
+      pause = pause_seconds || 0; stop = out_of_calls;
       const o = outcomes[0], view = (OUTCOME[o.status] || OUTCOME.needs_review)(o);
       st.outerHTML = `<span class="st chip ${view.cls}" title="${esc(o.message)}">${esc(view.label)}</span>`;
-      const bits = o.name ? [nice(o.name), o.email, `${o.skills_found} skills extracted`].filter(Boolean) : [o.message];
+      const bits = o.name ? [nice(o.name), o.email, `${o.skills_found} skills extracted`, o.ocr_used ? "read by OCR (scanned)" : ""].filter(Boolean) : [o.message];
       sub.textContent = bits.join(" · "); sub.classList.remove("hidden");
       if (o.status === "stored" || o.status === "conflict_pending" || o.status === "duplicate_ignored") ok++;
     } catch (err) { st.outerHTML = `<span class="chip rec-Reject">${esc(err.message).slice(0, 60)}</span>`; }
+    if (stop && i < files.length - 1) {                // the provider says it cannot afford another resume: stop cleanly
+      for (let k = i + 1; k < files.length; k++) $(".st", rows[k]).outerHTML = `<span class="chip st-warn">Not processed: free limit reached</span>`;
+      toast(`Stopped after ${i + 1} of ${files.length}: today's free AI limit is used up. Upload the rest later.`);
+      break;
+    }
+    if (pause && i < files.length - 1) {               // give the free tier a moment to breathe between resumes
+      const next = $(".st", rows[i + 1]);
+      for (let s = Math.ceil(pause); s > 0; s--) { next.textContent = `pausing ${s}s`; await sleep(1000); }
+      next.textContent = "waiting";
+    }
   }
   state.busy = false;
+  if (ui.quick) {                                      // on the ranking page: refresh the ranking in place, no page change
+    if (ok) { toast(`${ok} of ${files.length} resume${files.length > 1 ? "s" : ""} analysed. Ranking updated.`); await renderResults(); }
+    else toast("No resumes could be processed. Check the reasons above.");
+    return;
+  }
   if (ok) {
     $("#uploadDoneTitle").textContent = `${ok} of ${files.length} resume${files.length > 1 ? "s" : ""} analysed`;
     $("#toResults").href = `#/results/${state.jobId}`;
@@ -325,12 +489,23 @@ async function uploadFiles(files) {
   } else toast("No resumes could be processed. Check the reasons above.");
 }
 
+
+// ---- ranking page: upload more resumes right here and watch the ranking update
+$("#addMore").addEventListener("click", () => {
+  const box = $("#quickUpload"), open = box.classList.toggle("hidden") === false;
+  $("#addMore").setAttribute("aria-expanded", String(open));
+  if (open) box.scrollIntoView({ block: "nearest", behavior: "smooth" });
+});
+$("#quickClose").addEventListener("click", () => { $("#quickUpload").classList.add("hidden"); $("#addMore").setAttribute("aria-expanded", "false"); });
+$("#quickFiles").addEventListener("change", (e) => { planAndUpload({ files: [...e.target.files], skipped: 0 }, UP_QUICK); e.target.value = ""; });
+$("#quickFolderBtn").addEventListener("click", () => $("#quickFolder").click());
+$("#quickFolder").addEventListener("change", (e) => { planAndUpload(pickResumes([...e.target.files]), UP_QUICK); e.target.value = ""; });
+
 // ---------------------------------------------------------------- step 3: results (ranking + chat)
 async function renderResults() {
   const [job, cards] = await Promise.all([api(`/api/jobs/${state.jobId}`), api(`/api/jobs/${state.jobId}/candidates`)]);
   state.job = job; state.cards = cards; state.filter = "All"; state.picked.clear(); updateChrome();
   $("#resultsTitle").innerHTML = `${esc(job.title || "Untitled job")}`;
-  $("#addMore").href = `#/upload/${state.jobId}`;
   $("#exportBtn").href = `/api/jobs/${state.jobId}/export.csv`;
   $("#exportXlsx").href = `/api/jobs/${state.jobId}/export.xlsx`;
   renderStats(); renderFilters(); renderRanking(); updateCompareBtn(); renderSuggestions(); renderAlerts(); loadChatHistory(); loadDb();
@@ -366,6 +541,7 @@ function renderRanking() {
   $("#rankBody").innerHTML = rows.map((c) => {
     const flag = c.verification === "corrected" ? `<span class="chip st-warn" title="The second check corrected something in this resume's data">Corrected</span>`
       : c.verification === "partial" ? `<span class="chip st-warn" title="Second AI unavailable at the time">Partly checked</span>` : "";
+    const gate = c.gate_missing?.length ? `<span class="chip rec-Reject" title="A must-have for this job is missing, so this candidate cannot be Shortlist">Missing must-have: ${esc(c.gate_missing.slice(0, 2).join(", "))}${c.gate_missing.length > 2 ? ` +${c.gate_missing.length - 2}` : ""}</span>` : "";
     const pending = c.llm_status === "unavailable" ? `<span class="chip st-warn" title="AI analysis text missing; retry">Analysis pending</span>` : "";
     return `<tr class="row ${state.picked.has(c.application_id) ? "picked" : ""}" tabindex="0" data-app="${c.application_id}">
       <td class="pick-cell"><input type="checkbox" class="pick" data-pick="${c.application_id}" ${state.picked.has(c.application_id) ? "checked" : ""} aria-label="Select ${esc(nice(c.name))} to compare"></td>
@@ -373,7 +549,7 @@ function renderRanking() {
       <td><div class="font-medium">${esc(nice(c.name))}</div><div class="mono mt-0.5 text-[11.5px]" style="color:var(--faint)">${esc(c.file)}</div></td>
       <td><div class="flex items-center gap-3"><span class="mono w-11 text-[15px] font-medium">${fmt1(c.score)}</span>
         <div class="bar ${barClass(c.score)} flex-1"><i style="width:${Math.max(2, c.score)}%"></i></div></div>
-        <div class="mt-2 flex flex-wrap gap-1.5"><span class="chip ${recClass(c.recommendation)}">${c.recommendation}</span>${flag}${pending}</div></td>
+        <div class="mt-2 flex flex-wrap gap-1.5"><span class="chip ${recClass(c.recommendation)}">${c.recommendation}</span>${gate}${flag}${pending}</div></td>
       <td class="hide-sm mono text-[13px]">${c.required_matched}<span style="color:var(--faint)"> / ${c.required_total}</span></td>
       <td class="hide-sm text-[13px]">${c.experience_years ? c.experience_years + " yr" : "Fresher"}${c.internships.length ? `<div class="mono text-[11px]" style="color:var(--faint)">${c.internships.length} internship${c.internships.length > 1 ? "s" : ""}</div>` : ""}</td></tr>`;
   }).join("");
@@ -428,7 +604,7 @@ function openCompare(ids) {
         <div class="mt-3 flex flex-wrap items-end gap-x-3 gap-y-2"><span class="text-[34px] font-semibold leading-none">${fmt1(c.score)}</span>
           <span class="chip ${recClass(c.recommendation)}">${c.recommendation}</span>${c.score === best ? '<span class="mono text-[10px]" style="color:var(--good)">HIGHEST</span>' : ""}</div>
         <div class="mono mt-2 text-[12px]" style="color:var(--muted)">${c.required_matched} of ${c.required_total} required skills</div>
-        <div class="mt-4 space-y-2.5">${COMPONENTS.map(([k, label]) => { const v = c.components[k] ?? 0;
+        <div class="mt-4 space-y-2.5">${componentRows().map(([k, label]) => { const v = c.components[k] ?? 0;
           return `<div><div class="flex justify-between text-[12px]"><span>${label}</span><span class="mono">${fmt1(v)}</span></div><div class="bar mt-1"><i style="width:${Math.max(2, v)}%"></i></div></div>`; }).join("")}</div>
         <div class="mono mt-4 text-[12px]" style="color:var(--muted)">${c.experience_years ? c.experience_years + " yr paid" : "Fresher"} · ${c.internships.length} internship${c.internships.length === 1 ? "" : "s"}</div>
       </div>`).join("")}</div>
@@ -511,7 +687,56 @@ const closeModal = () => $("#modal").classList.remove("open");
 $("#modal").addEventListener("click", (e) => { if (e.target.id === "modal") closeModal(); });
 
 // ---------------------------------------------------------------- candidate drawer
-const COMPONENTS = [["skills", "Skills match", "50%"], ["experience", "Experience", "20%"], ["projects_education", "Projects & education", "15%"], ["fit", "Overall fit", "15%"]];
+// ---------------------------------------------------------------- score weights: the recruiter decides how much each part counts
+const COMPONENT_LABELS = { skills: "Skills match", experience: "Experience", projects_education: "Projects & education", fit: "Overall fit" };
+const COMPONENT_HELP = { skills: "required and preferred skills found on the resume (computed by code)", experience: "years of work, scaled by how relevant the field is (code)",
+  projects_education: "how relevant the projects, degree and courses are (AI judgment)", fit: "overall suitability for the role (AI judgment)" };
+function componentRows() {        // [key, label, "weight%"] following this job's own weights
+  const w = state.job?.weights || { skills: 50, experience: 20, projects_education: 15, fit: 15 };
+  return Object.keys(COMPONENT_LABELS).map((k) => [k, COMPONENT_LABELS[k], `${Number(w[k])}%`]);
+}
+
+$("#weightsBtn").addEventListener("click", () => {
+  const j = state.job; if (!j) return;
+  const body = $("#modalBody");
+  body.className = "card p-6";
+  body.innerHTML = `<form id="wForm" novalidate><div class="eyebrow">This job only</div><h2 class="h-display mt-2 text-[22px]">Score settings</h2>
+    <p class="mt-2 text-sm" style="color:var(--muted)">Decide how much each part counts towards the match score. They must add up to 100. Changing them re-ranks everyone straight away; no AI is used again.</p>
+    <div class="mt-4 space-y-3">${Object.keys(COMPONENT_LABELS).map((k) => `<div><label class="flex items-baseline justify-between text-sm font-medium" for="w_${k}">${COMPONENT_LABELS[k]}
+      <span class="flex items-center gap-1"><input id="w_${k}" class="field w-20 text-right" type="number" min="0" max="100" step="1" value="${j.weights[k]}"> %</span></label>
+      <div class="mono text-[11px]" style="color:var(--faint)">${COMPONENT_HELP[k]}</div></div>`).join("")}</div>
+    <div class="mt-3 flex items-center justify-between text-sm"><span class="mono" id="wTotal"></span></div>
+    <div class="hairline mt-4 pt-4"><div class="text-sm font-medium">Must-haves <span class="mono text-[11px] font-normal" style="color:var(--faint)">(hard gates)</span></div>
+      <p class="mt-1 text-[12.5px]" style="color:var(--muted)">Tick the required skills a candidate cannot be shortlisted without. If a resume lacks one, the candidate is held at Consider whatever their score, and the missing must-have is shown next to their name.</p>
+      <div class="mt-2 flex flex-wrap gap-x-4 gap-y-1.5">${j.required_skills.map((s, i) => `<label class="flex items-center gap-1.5 text-sm" for="g_${i}"><input id="g_${i}" type="checkbox" data-gate="${esc(s)}" ${j.gates.includes(s) ? "checked" : ""}> ${esc(s)}</label>`).join("") || `<span class="text-sm" style="color:var(--faint)">This job has no required skills.</span>`}</div></div>
+    <div class="hairline mt-4 pt-4"><div class="text-sm font-medium">Cutoffs</div>
+      <p class="mt-1 text-[12.5px]" style="color:var(--muted)">The scores at which a candidate is labelled.</p>
+      <div class="mt-3 grid grid-cols-2 gap-3"><label class="text-sm" for="c_shortlist">Shortlist at or above<input id="c_shortlist" class="field mt-1" type="number" min="1" max="100" step="1" value="${j.cutoffs.shortlist}"></label>
+        <label class="text-sm" for="c_consider">Consider at or above<input id="c_consider" class="field mt-1" type="number" min="1" max="99" step="1" value="${j.cutoffs.consider}"></label></div>
+      <p class="mono mt-2 text-[11px]" style="color:var(--faint)">Below the Consider cutoff a candidate is labelled Reject.</p></div>
+    <div class="mt-3 text-right"><button class="btn btn-ghost btn-sm" type="button" id="wReset">Reset everything to defaults</button></div>
+    <p id="wErr" class="mt-3 hidden text-sm" style="color:var(--bad)" role="alert"></p>
+    <div class="mt-5 flex justify-end gap-2"><button class="btn btn-ghost btn-sm" type="button" id="wCancel">Cancel</button><button class="btn btn-primary btn-sm" type="submit" id="wSave">Save and re-rank</button></div></form>`;
+  $("#modal").classList.add("open");
+  const keys = Object.keys(COMPONENT_LABELS), val = () => Object.fromEntries(keys.map((k) => [k, Number($(`#w_${k}`).value || 0)]));
+  const total = () => { const t = keys.reduce((a, k) => a + val()[k], 0), ok = Math.abs(t - 100) < 0.01;
+    $("#wTotal").innerHTML = `Total: <b style="color:${ok ? "var(--good)" : "var(--bad)"}">${t}%</b>${ok ? "" : " (must be 100)"}`; $("#wSave").disabled = !ok; };
+  keys.forEach((k) => $(`#w_${k}`).addEventListener("input", total)); total();
+  const cuts = () => ({ shortlist: Number($("#c_shortlist").value), consider: Number($("#c_consider").value) });
+  $("#wCancel").onclick = closeModal;
+  $("#wReset").onclick = () => { keys.forEach((k) => ($(`#w_${k}`).value = j.default_weights[k])); $("#c_shortlist").value = j.default_cutoffs.shortlist; $("#c_consider").value = j.default_cutoffs.consider; $$("[data-gate]").forEach((b) => (b.checked = false)); total(); };
+  $("#wForm").addEventListener("submit", async (e) => {
+    e.preventDefault(); const err = $("#wErr"); err.classList.add("hidden");
+    const c = cuts();
+    if (!(c.consider > 0 && c.consider < c.shortlist && c.shortlist <= 100)) { err.textContent = "Consider must be above 0 and below Shortlist, and Shortlist at most 100."; err.classList.remove("hidden"); return; }
+    try {
+      const put = (path, body) => api(`/api/jobs/${state.jobId}/${path}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      await put("weights", val()); await put("cutoffs", cuts());
+      await put("gates", { skills: $$("[data-gate]:checked").map((b) => b.dataset.gate) });
+      closeModal(); toast("Settings saved and ranking updated"); await renderResults();
+    } catch (ex) { err.textContent = ex.message; err.classList.remove("hidden"); }
+  });
+});
 const STATUS_LABEL = { solid: "", working: "working", inferred: "inferred", semantic: "by meaning", basic: "basic", partial: "partial", missing: "" };
 
 function openDrawer(appId) {
@@ -520,7 +745,7 @@ function openDrawer(appId) {
     const list = c.skills.filter((s) => s.colour === colour);
     if (!list.length) return "";
     return `<div class="mt-4"><div class="mono text-[10.5px] uppercase tracking-[.16em]" style="color:var(--faint)">${title} · ${list.length}</div>
-      <div class="mt-2 flex flex-wrap gap-1.5">${list.map((s) => `<span class="sk sk-${colour}" title="${esc(s.evidence ? `${s.importance} · resume says: “${s.evidence}”` : s.importance)}">${esc(s.skill)}${STATUS_LABEL[s.status] ? ` <small>${STATUS_LABEL[s.status]}</small>` : ""}${s.importance === "preferred" ? ` <small>bonus</small>` : ""}</span>`).join("")}</div></div>`;
+      <div class="mt-2 flex flex-wrap gap-1.5">${list.map((s) => `<span class="sk sk-${colour}" title="${esc([s.evidence ? `${s.importance} · resume says: “${s.evidence}”` : s.importance, s.notes].filter(Boolean).join(" · "))}">${esc(s.skill)}${STATUS_LABEL[s.status] ? ` <small>${STATUS_LABEL[s.status]}</small>` : ""}${s.notes?.startsWith("listed") ? ` <small>listed only</small>` : s.notes?.startsWith("last used") ? ` <small>${esc(s.notes)}</small>` : ""}${s.importance === "preferred" ? ` <small>bonus</small>` : ""}</span>`).join("")}</div></div>`;
   };
   const list = (items) => items.length ? `<ul class="mt-2 space-y-1.5 text-[14px]" style="color:#cfcbdb">${items.map((i) => `<li class="flex gap-2"><span style="color:var(--faint)">–</span><span>${esc(i)}</span></li>`).join("")}</ul>` : `<p class="mt-2 text-sm" style="color:var(--faint)">None found</p>`;
   const section = (title, inner) => `<div class="hairline mt-7 pt-6"><div class="mono text-[10.5px] uppercase tracking-[.18em]" style="color:var(--faint)">${title}</div>${inner}</div>`;
@@ -555,9 +780,13 @@ function openDrawer(appId) {
     <div class="mt-7 flex items-end gap-5"><div class="text-[56px] font-semibold leading-none tracking-tight">${fmt1(c.score)}</div>
       <div class="pb-1.5"><span class="chip ${recClass(c.recommendation)}">${c.recommendation}</span>
       <div class="mono mt-2 text-xs" style="color:var(--muted)">${c.required_matched} of ${c.required_total} required skills</div></div></div>
+    ${state.job?.gates?.length ? `<div class="mt-5 rounded-xl border p-3 text-[13px]" style="border-color:${c.gate_missing.length ? "rgba(229,86,109,.35)" : "rgba(95,208,138,.3)"}">
+      <div class="mono text-[10.5px] uppercase tracking-[.16em]" style="color:var(--faint)">Must-haves</div>
+      <div class="mt-1.5 flex flex-wrap gap-1.5">${state.job.gates.map((g) => `<span class="sk ${c.gate_missing.includes(g) ? "sk-red" : "sk-green"}">${esc(g)} <small>${c.gate_missing.includes(g) ? "missing" : "met"}</small></span>`).join("")}</div>
+      ${c.gate_missing.length ? `<p class="mt-2" style="color:var(--muted)">Because a must-have is missing, this candidate is held at ${esc(c.recommendation)} even if the score is higher.</p>` : ""}</div>` : ""}
     ${c.summary ? `<p class="mt-5 text-[15px] leading-relaxed" style="color:#d3cfde">${esc(c.summary)}</p>` : `<p class="mt-5 text-sm" style="color:var(--warn)">Written analysis unavailable (AI was busy). Use “Retry now” on the ranking page.</p>`}
 
-    ${section("How the score was built", `<div class="mt-4 space-y-3.5">${COMPONENTS.map(([k, label, w]) => {
+    ${section("How the score was built", `<div class="mt-4 space-y-3.5">${componentRows().map(([k, label, w]) => {
       const v = c.components[k] ?? 0;
       return `<div><div class="flex justify-between text-[13px]"><span>${label} <span class="mono" style="color:var(--faint)">· weight ${w}</span></span><span class="mono">${fmt1(v)}</span></div><div class="bar mt-1.5"><i style="width:${Math.max(2, v)}%"></i></div></div>`;
     }).join("")}</div>`)}
@@ -571,10 +800,15 @@ function openDrawer(appId) {
     ${section("Double-check log", c.verification_log.length
       ? `<p class="mt-2 text-[13px]" style="color:var(--muted)">Corrections made after the first extraction, with the reason for each.</p><ul class="mt-3 space-y-2">${c.verification_log.map(logLine).join("")}</ul>`
       : `<p class="mt-2 text-sm" style="color:var(--muted)">No corrections needed. The second check agreed with the extraction.</p>`)}
-    <p class="mono mt-8 text-[11px]" style="color:var(--faint)">Source file: ${esc(c.file)}</p></div>`;
+    <p class="mono mt-8 text-[11px]" style="color:var(--faint)">Source file: ${esc(c.file)}</p>
+    <button class="btn btn-ghost btn-sm mt-4" type="button" id="delResume" style="color:var(--bad)">Delete this resume</button></div>`;
   $("#drawer").scrollTop = 0;
   $("#drawer").classList.add("open"); $("#scrim").classList.add("open"); $("#drawer").setAttribute("aria-hidden", "false");
   $("#closeDrawer").focus(); $("#closeDrawer").onclick = closeDrawer;
+  $("#delResume").onclick = () => confirmDelete(`Delete ${nice(c.name)}'s resume?`, `The file ${c.file}, its extracted details and its score will be removed from this job.`, async () => {
+    await api(`/api/applications/${c.application_id}`, { method: "DELETE" });
+    closeDrawer(); toast("Resume deleted"); await selectJob(state.jobId); await renderResults();
+  });
 }
 function closeDrawer() { $("#drawer").classList.remove("open"); $("#scrim").classList.remove("open"); $("#drawer").setAttribute("aria-hidden", "true"); }
 $("#scrim").addEventListener("click", closeDrawer);
@@ -639,7 +873,9 @@ $("#clearChat").addEventListener("click", async () => { if (!state.jobId) return
 // ---------------------------------------------------------------- data viewer
 let dbTable = "applications";
 async function loadDb() {
-  let counts; try { counts = await api("/api/db"); } catch { return; }
+  if (state.auth.enabled && state.auth.user?.role !== "admin") { $("#dbSection").hidden = true; return; }     // only admins may read the tables: do not ask
+  let counts; try { counts = await api("/api/db"); } catch { $("#dbSection").hidden = true; return; }     // admin-only: recruiters do not see the block at all
+  $("#dbSection").hidden = false;
   $("#dbTabs").innerHTML = Object.entries(counts).map(([t, n]) => `<button class="tab ${t === dbTable ? "on" : ""}" data-t="${t}">${t}<small>${n}</small></button>`).join("");
   const d = await api(`/api/db/${dbTable}?limit=60`);
   const cell = (v) => v == null ? `<span style="color:var(--faint)">null</span>` : esc(v);
@@ -661,7 +897,7 @@ api("/api/health").then((h) => { if (h.llm_mode === "local") $("#footMode").text
   try {
     const st = await api("/api/auth/status");
     state.auth.enabled = st.auth_enabled; state.auth.open = st.registration_open; setLoginMode(false);
-    if (state.auth.enabled) { try { state.auth.user = (await api("/api/auth/me")).user; } catch { /* not signed in: route() sends us to the login screen */ } }
+    state.auth.user = st.user || null;
   } catch (e) { toast("Could not reach the server: " + e.message); }
   route().catch((e) => toast("Could not reach the server: " + e.message));
 })();

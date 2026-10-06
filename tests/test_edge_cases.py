@@ -128,7 +128,7 @@ def test_chat_handles_injection_and_unicode(client):
 
 def test_unknown_routes_and_methods(client):
     assert client.get("/api/nope").status_code == 404
-    assert client.delete(f"/api/jobs/{client.job_id}").status_code in (404, 405)
+    assert client.put(f"/api/jobs/{client.job_id}").status_code in (404, 405)
     assert client.get("/api/jobs/abc").status_code == 422
 
 
@@ -209,3 +209,31 @@ def test_docx_hidden_and_white_runs_are_ignored():
     r = extract_document(buf.getvalue(), "w.docx")
     assert r.ok and "Excel" in r.text and "Kubernetes" not in r.text and "Terraform" not in r.text
     assert "Kubernetes" in r.hidden_text and "Terraform" in r.hidden_text
+
+
+def test_docx_link_label_keeps_its_address():
+    """Found by the extraction audit: a 'Portfolio' hyperlink lost its URL in Word files (PDFs already kept it)."""
+    import io
+    import docx
+    from docx.opc.constants import RELATIONSHIP_TYPE as RT
+    d = docx.Document()
+    d.add_paragraph("Body text about projects and skills. " * 10)
+    d.add_paragraph("github.com/someone")
+    d.part.relate_to("https://someone.example.app", RT.HYPERLINK, is_external=True)
+    d.part.relate_to("https://github.com/someone", RT.HYPERLINK, is_external=True)
+    buf = io.BytesIO()
+    d.save(buf)
+    r = extract_document(buf.getvalue(), "l.docx")
+    assert "Links: https://someone.example.app" in r.text and r.text.count("github.com/someone") == 1
+
+
+def test_extract_preview_returns_text_without_saving(tmp_path):
+    from fastapi.testclient import TestClient
+    from app.main import app
+    c = TestClient(app)
+    r = c.post("/api/extract-preview", files={"file": ("jd.txt", b"Job Title: Nurse\nRequirements: RN licence", "text/plain")})
+    if r.status_code == 401:      # login is on by default; the endpoint is protected like the rest
+        return
+    assert r.json()["status"] == "ok" and "RN licence" in r.json()["text"]
+    bad = c.post("/api/extract-preview", files={"file": ("x.exe", b"zzz", "application/octet-stream")}).json()
+    assert bad["status"] == "unsupported"

@@ -127,7 +127,7 @@ def test_protected_routes_need_login(api):
     for path in ("/api/jobs", "/api/db", "/api/auth/me", "/api/users"):
         assert api.get(path).status_code == 401
     assert api.get("/api/health").status_code == 200
-    assert api.get("/api/auth/status").json() == {"auth_enabled": True, "registration_open": True}
+    assert api.get("/api/auth/status").json() == {"auth_enabled": True, "registration_open": True, "user": None}
 
 
 def test_login_logout_flow_and_cookie_flags(api):
@@ -201,7 +201,7 @@ def test_auth_off_means_no_login_needed(conn, monkeypatch):
     with TestClient(app) as c:
         assert c.get("/api/jobs").status_code == 200
         assert c.get("/api/auth/me").json()["user"]["role"] == "admin"
-        assert c.get("/api/auth/status").json() == {"auth_enabled": False, "registration_open": False}
+        assert c.get("/api/auth/status").json() == {"auth_enabled": False, "registration_open": False, "user": None}
     app.dependency_overrides.clear()
 
 
@@ -371,7 +371,7 @@ def test_first_registered_account_is_the_admin_then_recruiters(conn, monkeypatch
     app.dependency_overrides[deps.get_db] = lambda: conn
     try:
         with TestClient(app) as c:
-            assert c.get("/api/auth/status").json() == {"auth_enabled": True, "registration_open": True}
+            assert c.get("/api/auth/status").json() == {"auth_enabled": True, "registration_open": True, "user": None}
             first = c.post("/api/auth/register", json={"email": "first@x.com", "password": PW, "name": "First"})
             assert first.status_code == 201 and first.json()["user"]["role"] == "admin"
             assert c.get("/api/users").status_code == 200                               # and can manage users straight away
@@ -410,3 +410,27 @@ def test_session_secret_is_generated_once_and_survives_restarts(tmp_path, monkey
     monkeypatch.setattr(auth, "_secret_cache", [])
     (tmp_path / "session_secret.txt").write_text("y" * 64, encoding="utf-8")    # a different secret rejects old tokens
     assert auth.read_token(token) is None
+
+
+def test_new_job_settings_and_delete_endpoints_respect_ownership(api, conn):
+    """Found worth pinning by the bug hunt: weights, cutoffs, must-haves and both deletes must be 404 for another account."""
+    from conftest import _judge, add_candidate
+    deps.JOB_LLMS.update(jd_llm=_judge, canon_llm=_judge)
+    try:
+        auth.create_user(conn, "rec2@x.com", PW, "Rec Two", "recruiter")
+        a, b = TestClient(app), TestClient(app)
+        login(a, "rec@x.com"); login(b, "rec2@x.com")
+        job = _job_as(a)
+        app_id = add_candidate(conn, job, "Jeevan Raj", "j@x.com", "9000000001", ["Python"], 0).application_id
+        w = {"skills": 50, "experience": 20, "projects_education": 15, "fit": 15}
+        attempts = [("put", f"/api/jobs/{job}/weights", w), ("delete", f"/api/jobs/{job}/weights", None),
+                    ("put", f"/api/jobs/{job}/cutoffs", {"shortlist": 80, "consider": 40}), ("delete", f"/api/jobs/{job}/cutoffs", None),
+                    ("put", f"/api/jobs/{job}/gates", {"skills": ["Python"]}), ("delete", f"/api/applications/{app_id}", None),
+                    ("delete", f"/api/jobs/{job}", None)]
+        for method, path, body in attempts:
+            r = getattr(b, method)(path, json=body) if body is not None else getattr(b, method)(path)
+            assert r.status_code == 404, ("leaked", method, path)
+        assert a.get(f"/api/jobs/{job}").status_code == 200 and len(a.get(f"/api/jobs/{job}/candidates").json()) == 1        # nothing was changed or deleted
+        assert a.put(f"/api/jobs/{job}/weights", json=w).status_code == 200
+    finally:
+        deps.JOB_LLMS.clear()

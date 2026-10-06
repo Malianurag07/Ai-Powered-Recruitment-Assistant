@@ -3,7 +3,7 @@ from datetime import date
 
 from app.llm.client import LLMError
 from app.llm.jd_parsing import extract_job
-from app.llm.scoring import duration_months, experience_score, recommend, score_candidate, skill_match
+from app.llm.scoring import WEIGHTS, duration_months, experience_score, recommend, score_candidate, skill_match
 from app.models import CandidateProfile, JobProfile
 
 TODAY = date(2026, 9, 20)
@@ -73,7 +73,7 @@ def test_recommendation_cutoffs():
 def test_full_score_uses_weights():
     r = score_candidate(cand(skills=["Python", "Machine Learning", "Docker", "SQL", "FastAPI"], experience_years=0),
                         JOB, AL, llm=lambda s, u: GOOD_JUDGE, today=TODAY)
-    expected = round(0.5 * 100 + 0.2 * 60 + 0.15 * 70 + 0.15 * 80, 1)
+    expected = round(WEIGHTS["skills"] * 100 + WEIGHTS["experience"] * 60 + WEIGHTS["projects_education"] * 70 + WEIGHTS["fit"] * 80, 1)
     assert r.match_score == expected and r.recommendation == "Shortlist" and r.llm_status == "ok"
     assert r.skill_match_ratio == 1.0 and r.missing_skills == []
 
