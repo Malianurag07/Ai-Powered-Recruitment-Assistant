@@ -572,6 +572,7 @@ function togglePick(id, on, box) {
 function updateCompareBtn() {
   const n = state.picked.size, b = $("#compareBtn");
   b.textContent = `Compare (${n})`; b.disabled = n < 2;
+  $("#compareHint").hidden = n >= 2;
   b.title = n < 2 ? "Tick 2 or 3 candidates in the table" : "Compare the selected candidates side by side";
 }
 $("#compareBtn").addEventListener("click", () => openCompare([...state.picked]));
@@ -698,6 +699,7 @@ function componentRows() {        // [key, label, "weight%"] following this job'
 
 $("#weightsBtn").addEventListener("click", () => {
   const j = state.job; if (!j) return;
+  if (!j.weights || !j.cutoffs || !Array.isArray(j.gates)) return toast("The server is running older code. Stop it, start it again (uvicorn app.main:app --reload), then reload this page.");
   const body = $("#modalBody");
   body.className = "card p-6";
   body.innerHTML = `<form id="wForm" novalidate><div class="eyebrow">This job only</div><h2 class="h-display mt-2 text-[22px]">Score settings</h2>
@@ -780,10 +782,10 @@ function openDrawer(appId) {
     <div class="mt-7 flex items-end gap-5"><div class="text-[56px] font-semibold leading-none tracking-tight">${fmt1(c.score)}</div>
       <div class="pb-1.5"><span class="chip ${recClass(c.recommendation)}">${c.recommendation}</span>
       <div class="mono mt-2 text-xs" style="color:var(--muted)">${c.required_matched} of ${c.required_total} required skills</div></div></div>
-    ${state.job?.gates?.length ? `<div class="mt-5 rounded-xl border p-3 text-[13px]" style="border-color:${c.gate_missing.length ? "rgba(229,86,109,.35)" : "rgba(95,208,138,.3)"}">
+    ${state.job?.gates?.length ? `<div class="mt-5 rounded-xl border p-3 text-[13px]" style="border-color:${(c.gate_missing || []).length ? "rgba(229,86,109,.35)" : "rgba(95,208,138,.3)"}">
       <div class="mono text-[10.5px] uppercase tracking-[.16em]" style="color:var(--faint)">Must-haves</div>
-      <div class="mt-1.5 flex flex-wrap gap-1.5">${state.job.gates.map((g) => `<span class="sk ${c.gate_missing.includes(g) ? "sk-red" : "sk-green"}">${esc(g)} <small>${c.gate_missing.includes(g) ? "missing" : "met"}</small></span>`).join("")}</div>
-      ${c.gate_missing.length ? `<p class="mt-2" style="color:var(--muted)">Because a must-have is missing, this candidate is held at ${esc(c.recommendation)} even if the score is higher.</p>` : ""}</div>` : ""}
+      <div class="mt-1.5 flex flex-wrap gap-1.5">${state.job.gates.map((g) => `<span class="sk ${(c.gate_missing || []).includes(g) ? "sk-red" : "sk-green"}">${esc(g)} <small>${(c.gate_missing || []).includes(g) ? "missing" : "met"}</small></span>`).join("")}</div>
+      ${(c.gate_missing || []).length ? `<p class="mt-2" style="color:var(--muted)">Because a must-have is missing, this candidate is held at ${esc(c.recommendation)} even if the score is higher.</p>` : ""}</div>` : ""}
     ${c.summary ? `<p class="mt-5 text-[15px] leading-relaxed" style="color:#d3cfde">${esc(c.summary)}</p>` : `<p class="mt-5 text-sm" style="color:var(--warn)">Written analysis unavailable (AI was busy). Use “Retry now” on the ranking page.</p>`}
 
     ${section("How the score was built", `<div class="mt-4 space-y-3.5">${componentRows().map(([k, label, w]) => {
@@ -901,3 +903,7 @@ api("/api/health").then((h) => { if (h.llm_mode === "local") $("#footMode").text
   } catch (e) { toast("Could not reach the server: " + e.message); }
   route().catch((e) => toast("Could not reach the server: " + e.message));
 })();
+
+// A script error should never fail silently (a button that does nothing looks broken): tell the user, once per page load.
+let shownScriptError = false;
+window.addEventListener("error", () => { if (!shownScriptError) { shownScriptError = true; toast("Something went wrong on this page. Reload it; if it keeps happening, restart the server."); } });
