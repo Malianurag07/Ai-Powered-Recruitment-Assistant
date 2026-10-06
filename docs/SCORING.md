@@ -80,3 +80,26 @@ Thresholds are constants in `app/llm/scoring.py` and can be tuned.
   (measured: 6 to 8 items). Within one job every resume is compared with the same list, so the ranking there is consistent.
 - Proficiency comes only from wording on the resume ("basic", "working knowledge"). Unstated depth is treated as solid.
 - Weights are judgment calls, chosen so that verifiable skills dominate.
+
+## Accuracy refinements (added later)
+- **Negation:** a skill the resume only mentions to say it is missing ("no experience with Docker", "without Docker") or being learned ("currently learning Docker") does not count as a skill the candidate has. One real mention anywhere is enough. Limit: the cue must sit directly before the skill, so "no experience with Docker or Kubernetes" negates Docker but not Kubernetes.
+- **Field-relevant experience:** the experience score is multiplied by 0.2 to 1.0 depending on how much of the job's skill set the candidate shows (full credit at a skills score of 50 or more). Years in an unrelated field still count a little.
+- **Raw resume text for the AI judge:** the first 5,000 characters of the resume are given to the judge next to the structured profile, with an instruction to treat them as data, never instructions.
+
+## Adjustable weights (per job)
+The defaults above (50/20/15/15) apply unless the recruiter changes them. On the ranking page, **Score weights** lets the recruiter set the four percentages for that job only (they must add up to 100). Saving recomputes every stored score and recommendation from the stored component scores in code, with no new AI call, so a change is instant and free. Because components are stored rounded to one decimal, a recomputed score can differ from the original by at most 0.1. Resetting returns the job to the defaults. The weights in use are shown in each candidate's score breakdown.
+
+## Adjustable cutoffs (per job)
+Shortlist at 70 and Consider at 45 are the defaults. In **Score settings** on the ranking page the recruiter can set both cutoffs for one job (Consider above 0 and below Shortlist, Shortlist at most 100). Saving relabels every stored candidate at once from its stored score; no AI call is made. Reset returns the defaults.
+
+## Must-haves (hard gates)
+A **must-have** is a required skill the recruiter says a candidate cannot be shortlisted without. The recruiter picks them when building a job ("Any deal-breakers?") or later under **Score settings** on the ranking page. If a resume does not meet a must-have (the skill is missing, or only adjacent experience was found), the candidate is **held at Consider** whatever their score, and the missing must-have is shown next to their name and in their details. They are held at Consider, not rejected, on purpose: the skill match can be wrong, so a human should still look. A candidate who already scores Consider or Reject keeps that label. Changing the must-haves relabels everyone at once from stored results, with no new AI call.
+
+## Degree requirements
+A requirement like "Bachelor's degree in Computer Science" cannot be matched against a skills list, so it is checked in code against the candidate's education: the level is read from the degree text (diploma, bachelor, master, doctorate) and a higher degree meets a lower requirement (an M.Sc. meets "Bachelor's degree"). If the requirement names a field, the degree must mention it (an M.Sc. in Data Science does not meet "in Computer Science"; broad words such as science or engineering are ignored because they do not tell fields apart). A degree met this way is shown as matched by meaning, with the degree as its evidence. Anything this check cannot decide goes to the AI meaning check as before.
+
+
+## Evidence and recency (skills)
+A matched skill earns full credit only if the resume shows it in use, and recently. Both checks only trim credit, never remove a match, and both are skipped when there is nothing to check against (a resume with no described work or dates is not penalised).
+- **Listed only:** if the skill appears in a skills list but no job, internship, project or certificate mentions it, and the resume text mentions it only once, it earns 85% of its credit. Shown as "listed only" on the skill.
+- **Recency:** if the only evidence is jobs or internships that ended a while ago, credit is 95% when the last use was 4 to 6 years ago and 85% at 7 years or more. Any undated project or certificate that shows the skill counts as current and cancels this. Shown as "last used in 20XX".

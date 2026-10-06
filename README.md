@@ -13,7 +13,7 @@ SQLite, open-source libraries).
 | **Backend** | Python, FastAPI, SQLite |
 | **Frontend** | HTML, Tailwind CSS (CDN), vanilla JavaScript. No build step |
 | **AI** | Groq (`qwen3.8-27b`, `gpt-oss-120b`) and Gemini (`gemini-3.1-flash-lite`); optional local Llama via Ollama |
-| **Tests** | 218 automated tests, no API keys needed to run them |
+| **Tests** | 272 automated tests, no API keys needed to run them |
 
 **Demo video:** https://drive.google.com/file/d/1xGxcIh01w392BSfrpsXGqaTh-zKKk3qz/view?usp=sharing
 
@@ -142,8 +142,9 @@ rule still apply), and search is keyword-only because embeddings are not availab
 | **Double verification** | Deterministic checks first (email, phone and every skill must appear in the raw text; soft skills move to their own list). Then a second AI proposes corrections, each with a verbatim quote that the code confirms. |
 | **Skill normalisation** | An alias table maps `ML`, `Scikit Learn`, `nodejs` to one canonical name. Unknown skills go to the AI in one batched call and are saved back to the table (marked `source='ai'`, reviewable). |
 
-Error handling: empty, corrupt, encrypted, oversized (>10 MB) and scanned (image-only) files, unsupported types, and
-legacy `.doc` are each rejected with a specific message. One bad file never blocks the rest of a batch.
+Error handling: empty, corrupt, encrypted and oversized (>10 MB) files, unsupported types, and legacy `.doc` are each rejected with a
+specific message. A scanned (image-only) PDF is read by OCR when OCR is on, and rejected with a message when it is off. Word files keep
+the addresses behind link labels such as "Portfolio". One bad file never blocks the rest of a batch.
 
 ## 5. Candidate scoring logic and methodology
 
@@ -158,7 +159,7 @@ Full rubric: [`docs/SCORING.md`](docs/SCORING.md). Summary:
 | **Projects & education (15%)** | AI | Relevance of projects, degree, certifications to the role. |
 | **Overall fit (15%)** | AI | Holistic judgment, including the soft skills the job asks for. |
 
-- **Recommendation:** Shortlist at 70 or above, Consider at 45-69, Reject below 45.
+- **Recommendation:** Shortlist at 70 or above, Consider at 45-69, Reject below 45. Both cutoffs and the four score weights can be changed per job under **Score settings** on the ranking page; changes re-rank instantly without new AI calls.
 - **Inference:** a resume listing TensorFlow but never the phrase "Machine Learning" earns partial credit (yellow, "inferred").
 - **Meaning match:** a requirement the resume states in other words earns credit (yellow "by meaning", or orange "partial") only when the AI
   supplies a quote that is verified to appear verbatim in the resume. This is what lets non-technical jobs (sales, healthcare) score fairly.
@@ -166,6 +167,46 @@ Full rubric: [`docs/SCORING.md`](docs/SCORING.md). Summary:
 - **Colour badges:** green solid, yellow working/inferred/by meaning, orange basic/partial, red missing.
 - **Soft skills** are stored separately and never inflate the technical match.
 - **Internships** never count as paid experience.
+
+### Recruiter controls (all per job, none needs a new AI call after the first scoring)
+
+- **Build a job with questions.** On the Jobs page, **Build with questions** asks for the title, a short summary, the must-have and
+  nice-to-have skills, the degree, minimum years, responsibilities, soft skills, and any deal-breakers. Skills mentioned only in
+  the summary or responsibilities ("deploy with Streamlit") are found by the job parser and added as required skills. Pasting or
+  uploading a job description still works exactly as before.
+- **Score settings** (button on the ranking page): set how much each of the four parts counts (they must add up to 100), the
+  Shortlist and Consider cutoffs, and the **must-haves**. Saving re-ranks everyone instantly from stored results.
+- **Must-haves (hard gates).** A must-have is a required skill a candidate cannot be shortlisted without. A candidate who lacks one
+  is held at **Consider** whatever their score, and the missing must-have is shown on their row and in their details. They are held,
+  not rejected, because the skill match can be wrong and a person should still look.
+- **Delete** a resume (candidate drawer) or a whole job (job list), with a confirmation. Deleting a job removes its resumes,
+  scores and chat history.
+- **Text check.** Choose any resume or job description file to see the exact text the reader extracts (and "read by OCR" for scans).
+- **Upload more resumes without leaving the ranking**, or a **whole folder** (sub-folders included; only PDF and Word files are used).
+  Before a batch of 3 or more, a card shows the AI calls it needs against the free calls left today: Groq's remaining count is read
+  from its own response headers; Google reports none, so its figure is this app's own count against a limit you set. If the batch
+  would not fit you can process only what fits. A short pause (longer while a provider is rate-limiting) separates resumes, and a
+  batch stops cleanly when a provider runs out.
+
+Optional `.env` settings for these (defaults shown; the daily limits are planning numbers, set the real ones for your keys):
+
+```
+GROQ_FAST_CALLS_PER_DAY=1000    GROQ_CALLS_PER_DAY=1000    GEMINI_CALLS_PER_DAY=500
+BATCH_PAUSE_SECONDS=2           BATCH_PAUSE_AFTER_LIMIT_SECONDS=12
+OCR_ENABLED=1                   OCR_MAX_PAGES=3            OCR_DPI=150
+```
+
+### Accuracy refinements in the score
+
+- **Negation:** "no experience with Docker", "without Docker" or "currently learning Docker" do not count as having Docker.
+- **Evidence and recency:** a skill only listed in a skills section, while the resume describes other work, earns 85% of its credit;
+  a skill last used 4 to 6 years ago earns 95%, and 7 or more years 85%. Both are skipped when there is nothing to check against.
+- **Field-relevant experience:** years of work count in full only when the candidate's skills show the field; years elsewhere still count a little.
+- **Degrees:** a higher degree meets a lower requirement (an M.Sc. meets "Bachelor's degree"); a field named in the requirement must appear in the degree.
+- **The AI judge reads the resume text** (first 5,000 characters), not only the structured profile, and is told it is data, never instructions.
+- **Scanned PDFs:** a PDF with no text layer at all is read by OCR (Gemini vision, first 3 pages); files with text never use it.
+
+Details and constants: [`docs/SCORING.md`](docs/SCORING.md).
 
 **Login is built in and on by default, on the same single link.** Open http://127.0.0.1:8000 and you get the login screen. On a fresh
 install there are no accounts yet, so click "Create an account": **the first account to register becomes the admin**, everyone after
@@ -258,7 +299,7 @@ shows exactly what was stored.
 Useful commands:
 
 ```bash
-python -m pytest tests -q                        # 218 tests, no API keys needed
+python -m pytest tests -q                        # 272 tests, no API keys needed
 python scripts/demo_pipeline.py                  # rebuild the database from data/sample_resumes (live AI, ~2 min)
 python scripts/match_jd.py data/job_descriptions/ai_ml_intern.txt   # add a job to the existing database
 python scripts/test_queries.py                   # 25 live chat questions
@@ -270,7 +311,7 @@ Sample data: `data/sample_resumes/` (7 real resumes shared with permission, 3 sy
 
 ## 9. Assumptions
 
-- Resumes are in English, and text-based (selectable text), not scanned images.
+- Resumes are in English. A PDF with no selectable text (a scan) is read by OCR; everything else goes through the normal path.
 - A resume contains an email or phone number; without either the person cannot be identified, so the resume is flagged for review.
 - "Experience" means paid, full-time employment. Internships, training and academic projects are recorded separately and earn half credit in the experience score.
 - One person is identified by email **or** phone (last 10 digits).
@@ -282,7 +323,7 @@ Sample data: `data/sample_resumes/` (7 real resumes shared with permission, 3 sy
 
 ## 10. Known limitations
 
-- **No OCR.** Scanned or image-only PDFs are rejected with a clear message. Legacy `.doc` is unsupported.
+- **OCR is a fallback, not the main path.** Only a PDF with no text layer at all is read by OCR (Gemini vision, free tier, first 3 pages, about one call per page); a PDF or Word file with text never uses it. The page images are sent to Google like the resume text already is, so it is off with `LLM_MODE=local` or `OCR_ENABLED=0`, and then scanned files are rejected with a clear message as before. In a measured test on degraded scans it recovered about 100% of the words (a local OCR engine, RapidOCR, recovered about 60%); it was not tested for hand-written or non-English scans. A resume read by OCR is marked "read by OCR" in the upload list. Legacy `.doc` is unsupported.
 - **AI judgments are not perfectly repeatable.** Median-of-3 rounding cut the average run-to-run swing from 4.2 to 1.8 points, but a rounding boundary can still flip a score by up to about 6 points. Only the AI-judged 30% of the score is affected.
 - **Skill matching is word-for-word first,** then one extra AI pass matches requirements the resume states in other words, accepted only with a verbatim quote (section 5). That pass can be generous: some accepted quotes are only loosely related. Chat questions such as "who knows X?" search the skills list, not these meaning matches.
 - **The experience score counts total years in any field.** A candidate from an unrelated field who meets the minimum years still earns the full 20 points for experience, so even a complete mismatch scores about 26 rather than near 0 (the recommendation is still Reject).
@@ -290,7 +331,7 @@ Sample data: `data/sample_resumes/` (7 real resumes shared with permission, 3 sy
 - **Two-column PDFs** are extracted in block order, which is not always the visual order (the AI reads by section headings, so this rarely matters).
 - **`search_resume_text` matches literal words only.** Structured tools are preferred and used first.
 - **Free-tier rate limits.** AI calls are capped in flight (`LLM_MAX_CONCURRENCY`, default 4), fall back across models, and retry with exponential backoff; if everything still fails a resume is stored with "analysis pending" and a Retry button. Parallel uploads are therefore reliable but only 1.1-1.6x faster than sequential on free tiers (see `docs/BENCHMARK.md`).
-- **Sequential per-request pipeline** (about 13 s and 6 to 7 AI calls per resume, measured on free tiers). Uploads from the UI go one file at a time; there is no background job queue.
+- **Sequential per-request pipeline** (about 13 s and 6 to 7 AI calls per resume, measured on free tiers). Uploads from the UI go one file at a time with a short pause between resumes (longer while a provider is rate-limiting); there is no background job queue. A whole folder can be chosen or dropped (only PDF and Word files are used). Before a batch of 3 or more, the page estimates the AI calls needed against the free calls left today: Groq's remaining count is read from its own response headers, while Google reports none, so its figure is this app's own count against `GEMINI_CALLS_PER_DAY` (an estimate). If a provider runs out mid-batch the remaining files are marked "not processed" and can be uploaded later.
 - **Authentication is basic:** email and password with two roles. There is no single sign-on or OAuth, no email verification, no audit-grade access log, and the login lockout and sign-up limit are kept in memory (they reset when the server restarts).
 - **No bias audit.** Names and contact details are part of the text the AI reads. Automated screening tools can be legally regulated (see section 11); this project is a prototype and is **not** a compliant hiring system. A human must make the decision.
 - **English only; SQLite only** (single writer; fine for one recruiter, not for a large team).
@@ -300,7 +341,7 @@ Sample data: `data/sample_resumes/` (7 real resumes shared with permission, 3 sy
 
 ## 11. Testing, performance and comparison with commercial tools
 
-- **218 automated tests** cover parsing (including hostile files), extraction and validation, verification, scoring, duplicates and the concurrency race, the query tools (with injection attempts), hybrid retrieval, exports (with spreadsheet-injection checks), the API, and resilience.
+- **272 automated tests** cover parsing (including hostile files), extraction and validation, verification, scoring, duplicates and the concurrency race, the query tools (with injection attempts), hybrid retrieval, exports (with spreadsheet-injection checks), the API, and resilience.
 - **Quality-assurance suites:** `scripts/qa_offline.py` (43 cases, no AI quota: messy files, duplicates, API security and load) and `scripts/qa_live.py` (63 cases on the real AI: extraction accuracy, ranking, fairness, prompt injection, chat). Every failure they found (a verifier that overwrote correct years, invisible keyword-stuffing text, missed header and link contact details, missing security headers, logout not ending sessions, and non-technical jobs scoring near 0% on skills) was fixed and is covered by a unit test. Results are in `docs/qa_results/`. Line coverage of `app/` is 92%.
 - **Measured performance and accuracy** on this project's own data: [`docs/BENCHMARK.md`](docs/BENCHMARK.md).
 - **How this compares with commercial recruiting software**, on architecture and efficiency, and where it falls short: [`docs/COMPARISON.md`](docs/COMPARISON.md).
@@ -333,6 +374,10 @@ Sample data: `data/sample_resumes/` (7 real resumes shared with permission, 3 sy
 | Export to CSV or Excel | Both; the Excel file has a colour-coded skills matrix; formula injection from resumes is neutralised |
 | Better prompt engineering | Validated JSON with error-fed retries, evidence-quote verification, consensus scoring; see `docs/PROMPTS.md` |
 | Hybrid retrieval | BM25 + embeddings with weighted fusion over resume chunks (section 7) |
+| Job builder, delete, text check | Build a job by answering questions; delete resumes and jobs; see the exact extracted text of any file |
+| Adjustable scoring | Per-job weights, Shortlist/Consider cutoffs and must-have skills ("Score settings"), applied instantly without new AI calls |
+| Bulk upload within free limits | Folder upload, a free-tier estimate before a batch, pauses between resumes, clean stop at the limit |
+| OCR for scanned resumes | Gemini vision, only for PDFs with no text layer |
 | Authentication and user management | Built in, on by default (`AUTH_ENABLED=0` turns it off): login, two roles, admin Users page, hashed passwords, signed sessions (section 3) |
 
 
@@ -341,14 +386,14 @@ Sample data: `data/sample_resumes/` (7 real resumes shared with permission, 3 sy
 ```
 app/
   main.py, deps.py, config.py, database.py, models.py
-  parsing/    pdf_extractor, docx_extractor, document_extractor
+  parsing/    pdf_extractor, docx_extractor, document_extractor, ocr
   llm/        client, prompts, extraction, verification, skill_canonicalizer, jd_parsing, scoring,
               retrieval, query_tools, query_engine
   routes/     upload, analysis, query
-  services/   candidate_service, dedupe, skill_normalizer, read_models
+  services/   candidate_service, dedupe, skill_normalizer, read_models, auth_service, quota
 frontend/     index.html, styles.css, app.js
 scripts/      demo_pipeline, match_jd, test_queries, benchmark, qa_offline, qa_live, qa_common, qa_report
-tests/        218 tests (fake LLMs; no network)
+tests/        272 tests (fake LLMs; no network)
 docs/         SCORING.md, PROMPTS.md, BENCHMARK.md, COMPARISON.md, qa_results/
 data/         sample_resumes/, job_descriptions/, sample job description
 ```
