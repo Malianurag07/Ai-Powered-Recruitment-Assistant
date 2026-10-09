@@ -154,48 +154,10 @@ SCHEMA_UPGRADES = (
 )
 
 
-# Starter alias map: lowercase variant -> canonical name. Grows over time.
-SEED_ALIASES = {
-    "ml": "Machine Learning",
-    "machine learning": "Machine Learning",
-    "py": "Python",
-    "python3": "Python",
-    "js": "JavaScript",
-    "fast api": "FastAPI",
-    "fastapi": "FastAPI",
-    "tf": "TensorFlow",
-    "tensorflow": "TensorFlow",
-    "docker": "Docker",
-    "postgres": "PostgreSQL",
-    "postgresql": "PostgreSQL",
-    "sklearn": "Scikit-learn",
-    "scikit learn": "Scikit-learn",
-    "sql": "SQL",
-    "numpy": "NumPy",
-    "pandas": "Pandas",
-    "opencv": "OpenCV",
-    "yolo": "YOLO",
-    "lstm": "LSTM",
-    "cnn": "CNN",
-    "cnns": "CNN",
-    "llm": "LLMs",
-    "llms": "LLMs",
-    "large language models": "LLMs",
-    "rag": "RAG",
-    "retrieval-augmented generation": "RAG",
-    "github": "Git/GitHub",
-    "git": "Git/GitHub",
-    "git/github": "Git/GitHub",
-    "typescript": "TypeScript",
-    "javascript": "JavaScript",
-    "nextjs": "Next.js",
-    "next.js": "Next.js",
-    "react.js": "React",
-    "power bi": "Power BI",
-    "aws": "AWS",
-    "k8s": "Kubernetes",
-    "scikit-learn": "Scikit-learn",
-}
+# Starter alias map: lowercase spelling -> canonical skill name. It lives in app/skill_seed.py (grouped by canonical name, checked for clashes);
+# it is loaded into the skill_aliases table on every start, and the AI adds what it learns on top.
+from app.skill_seed import SEED_ALIASES  # noqa: E402,F401
+
 
 
 def get_connection():

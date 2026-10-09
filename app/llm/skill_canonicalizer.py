@@ -23,6 +23,18 @@ def _valid_name(name) -> bool:
     return isinstance(name, str) and 0 < len(name.strip()) <= 40 and not re.search(r"[,\n]", name)
 
 
+def known_names_for(unknown: list[str], aliases: dict[str, str], limit: int = MAX_KNOWN_SHOWN) -> list[str]:
+    """The canonical names to show the AI as "already used", at most `limit`. With a large table, cutting the alphabetical list at `limit`
+    would hide most of it, so names that share a word with the skills being resolved come first ("Computer Vision" for "cv models"),
+    then the rest alphabetically. This keeps the AI reusing existing names instead of inventing near-duplicates."""
+    names = sorted(set(aliases.values()))
+    if len(names) <= limit:
+        return names
+    words = {w for s in unknown for w in re.findall(r"[a-z0-9+#]+", s.lower()) if len(w) > 1}
+    overlap = lambda n: sum(w in words for w in re.findall(r"[a-z0-9+#]+", n.lower()))     # noqa: E731
+    return sorted(names, key=lambda n: (-overlap(n), n))[:limit]
+
+
 def canonicalize_skills(skills: list[str], aliases: dict[str, str], llm: LLMFn = _default_llm):
     """Return (mapping {skill: canonical}, learned {alias_lower: canonical}). Never raises on LLM trouble."""
     mapping = {s: aliases.get(s.strip().lower(), s.strip()) for s in skills}
@@ -30,7 +42,7 @@ def canonicalize_skills(skills: list[str], aliases: dict[str, str], llm: LLMFn =
     if not unknown:
         return mapping, {}
 
-    known = sorted(set(aliases.values()))[:MAX_KNOWN_SHOWN]
+    known = known_names_for(unknown, aliases)
     user = prompts.CANON_USER.format(known=json.dumps(known), skills=json.dumps(unknown))
     try:
         raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", llm(prompts.CANON_SYSTEM, user).strip())

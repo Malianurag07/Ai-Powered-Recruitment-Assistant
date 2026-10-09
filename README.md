@@ -13,7 +13,7 @@ open-source libraries.
 | **Backend** | Python, FastAPI, PostgreSQL |
 | **Frontend** | HTML, Tailwind CSS (CDN), vanilla JavaScript. No build step |
 | **AI** | Groq (`qwen3.8-27b`, `gpt-oss-120b`) and Gemini (`gemini-3.1-flash-lite`); optional local Llama via Ollama |
-| **Tests** | 331 automated tests, no API keys needed; those that touch the database need a PostgreSQL server (see section 8) |
+| **Tests** | 483 automated tests, no API keys needed; those that touch the database need a PostgreSQL server (see section 8) |
 
 **Demo video:** https://drive.google.com/file/d/1xGxcIh01w392BSfrpsXGqaTh-zKKk3qz/view?usp=sharing
 
@@ -143,7 +143,7 @@ rule still apply), and search is keyword-only because embeddings are not availab
 | **LLM structured extraction** | Resumes are too varied for regex or rule-based parsers. The model returns JSON against a strict schema. |
 | **Pydantic validation + one retry** | Output is validated (email format, sane years, lists never null). On failure the error is fed back to the model once; after two failures the resume is flagged `needs_review` instead of storing garbage. |
 | **Double verification** | Deterministic checks first (email, phone and every skill must appear in the raw text; soft skills move to their own list). Then a second AI proposes corrections, each with a verbatim quote that the code confirms. |
-| **Skill normalisation** | An alias table maps `ML`, `Scikit Learn`, `nodejs` to one canonical name. Unknown skills go to the AI in one batched call and are saved back to the table (marked `source='ai'`, reviewable). |
+| **Skill normalisation** | An alias table (about 780 skills and 4,400 spellings across engineering, product, design, data, marketing, finance, HR and healthcare, in `app/skill_seed.py`) maps `ML`, `Scikit Learn`, `nodejs`, `ComputerVision` to one canonical name. Unknown skills go to the AI in one batched call and are saved back to the table (marked `source='ai'`, reviewable). |
 
 Error handling: empty, corrupt, encrypted and oversized (>10 MB) files, unsupported types, and legacy `.doc` are each rejected with a
 specific message. A scanned (image-only) PDF is read by OCR when OCR is on, and rejected with a message when it is off. Word files keep
@@ -304,7 +304,7 @@ shows exactly what was stored.
 Useful commands:
 
 ```bash
-python -m pytest tests -q                        # 331 tests; the ~155 that touch the database are skipped unless TEST_DATABASE_URL is set
+python -m pytest tests -q                        # 483 tests; the ~155 that touch the database are skipped unless TEST_DATABASE_URL is set
 python scripts/demo_pipeline.py --wipe           # EMPTIES the database, then loads data/sample_resumes (live AI, ~2 min)
 python scripts/match_jd.py data/job_descriptions/ai_ml_intern.txt   # add a job to the existing database
 python scripts/test_queries.py                   # 25 live chat questions
@@ -346,7 +346,7 @@ Sample data: `data/sample_resumes/` (7 real resumes shared with permission, 3 sy
 
 ## 11. Testing, performance and comparison with commercial tools
 
-- **331 automated tests** cover parsing (including hostile files), extraction and validation, verification, scoring, duplicates and the concurrency race, the query tools (with injection attempts), hybrid retrieval, exports (with spreadsheet-injection checks), the API, and resilience.
+- **483 automated tests** cover parsing (including hostile files), extraction and validation, verification, scoring, duplicates and the concurrency race, the query tools (with injection attempts), hybrid retrieval, exports (with spreadsheet-injection checks), the API, and resilience.
 - **Quality-assurance suites:** `scripts/qa_offline.py` (43 cases, no AI quota: messy files, duplicates, API security and load) and `scripts/qa_live.py` (63 cases on the real AI: extraction accuracy, ranking, fairness, prompt injection, chat). Every failure they found (a verifier that overwrote correct years, invisible keyword-stuffing text, missed header and link contact details, missing security headers, logout not ending sessions, and non-technical jobs scoring near 0% on skills) was fixed and is covered by a unit test. Results are in `docs/qa_results/`. Line coverage of `app/` is 92%.
 - **Measured performance and accuracy** on this project's own data: [`docs/BENCHMARK.md`](docs/BENCHMARK.md).
 - **How this compares with commercial recruiting software**, on architecture and efficiency, and where it falls short: [`docs/COMPARISON.md`](docs/COMPARISON.md).
@@ -390,7 +390,7 @@ Sample data: `data/sample_resumes/` (7 real resumes shared with permission, 3 sy
 
 ```
 app/
-  main.py, deps.py, config.py, database.py, db.py, models.py
+  main.py, deps.py, config.py, database.py, db.py, skill_seed.py, models.py
   parsing/    pdf_extractor, docx_extractor, document_extractor, ocr
   llm/        client, prompts, extraction, verification, skill_canonicalizer, jd_parsing, scoring,
               retrieval, query_tools, query_engine
@@ -398,7 +398,7 @@ app/
   services/   candidate_service, dedupe, skill_normalizer, read_models, auth_service, quota
 frontend/     index.html, styles.css, app.js
 scripts/      demo_pipeline, match_jd, test_queries, benchmark, qa_offline, qa_live, qa_common, qa_report
-tests/        331 tests (fake LLMs; no network); those that use the database need TEST_DATABASE_URL
+tests/        483 tests (fake LLMs; no network); those that use the database need TEST_DATABASE_URL
 docs/         SCORING.md, PROMPTS.md, BENCHMARK.md, COMPARISON.md, qa_results/
 data/         sample_resumes/, job_descriptions/, sample job description
 ```

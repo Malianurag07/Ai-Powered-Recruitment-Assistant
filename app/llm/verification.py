@@ -68,37 +68,43 @@ _NEGATED_BEFORE = re.compile(
     re.I)
 
 
+def _form_pattern(form: str) -> str | None:
+    """A regex that finds `form` as a WHOLE word, whatever the spacing or punctuation ("scikit learn", "Scikit-learn", "scikitlearn"; "ci cd",
+    "CI/CD"; "ComputerVision", "Computer Vision"). It never matches inside another word, so "rag" is not found in "storage", "ios" not in
+    "studios", "java" not in "JavaScript", "excel" not in "excellent", and "C" not in "C++" or "C#"."""
+    chars = _alnum(form)                              # lower-case letters and digits, keeping + and #
+    if not chars:
+        return None
+    if len(chars) >= 6:                               # longer forms: any separators may appear between any two characters
+        core = r"[\W_]*".join(re.escape(c) for c in chars)
+    else:                                             # short forms: separators only between the words of the form (c++, node js, ci cd)
+        parts = [re.escape(p) for p in re.split(r"[^A-Za-z0-9+#]+", form) if p]
+        core = r"[\W_]*".join(parts)
+    tail = r"(?![A-Za-z0-9]|[+#])" if chars[-1].isalnum() else r"(?![A-Za-z0-9])"
+    return r"(?<![A-Za-z0-9])" + core + tail
+
+
 def _mentioned_positively(form: str, text: str) -> bool | None:
-    """True/False if the form is found (as a whole word) with/without a non-negated mention; None if it cannot be located."""
-    parts = [re.escape(p) for p in re.split(r"[^A-Za-z0-9+#]+", form) if p]
-    if not parts:
+    """True if the form is found as a whole word with at least one non-negated mention, False if every mention is negated ("no experience
+    with X", "learning X"), None if it is not found as a whole word at all."""
+    pattern = _form_pattern(form)
+    if pattern is None:
         return None
     found = False
-    for m in re.finditer(r"(?<![A-Za-z0-9])" + r"[\W_]*".join(parts) + r"(?![A-Za-z0-9])", text, re.I):
+    for m in re.finditer(pattern, text, re.I):
         found = True
-        before = re.split(r"[.;\n|•]", text[max(0, m.start() - 80):m.start()])[-1]
+        before = re.split(r"[.;\n|\u2022]", text[max(0, m.start() - 80):m.start()])[-1]
         if not _NEGATED_BEFORE.search(re.sub(r"\bnot\s+only\b", "also", before + "", flags=re.I)):
             return True
     return False if found else None
 
 
 def skill_in_text(skill: str, text: str, aliases: dict[str, str]) -> bool:
-    """True if the skill (or a known alias of it) appears in the text, ignoring case and punctuation.
+    """True if the skill (or a known spelling of it) appears in the text as a whole word, ignoring case, spacing and punctuation.
     A skill that is only mentioned as missing or being learned does not count."""
     forms = {skill} | {a for a, c in aliases.items() if c.lower() == skill.lower()}
-    low = text.lower()
-    present, verdicts = False, []
-    for f in forms:
-        if len(_alnum(f)) >= 3:
-            hit = _alnum(f) in _alnum(text)
-        else:
-            hit = bool(re.search(rf"(?<![a-z0-9]){re.escape(f.lower())}(?![a-z0-9])", low))   # very short skills (e.g. "C") need word boundaries
-        if hit:
-            present = True
-            verdicts.append(_mentioned_positively(f, text))
-    if not present:
-        return False
-    return not verdicts or True in verdicts or all(v is None for v in verdicts)
+    verdicts = [v for v in (_mentioned_positively(f, text) for f in forms) if v is not None]
+    return True in verdicts
 
 
 # ---------- stage 1 ----------

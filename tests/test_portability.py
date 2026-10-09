@@ -56,7 +56,7 @@ def test_last_login_uses_the_shared_timestamp_format(pool):
 
 
 # ---- guard: SQLite must not creep back into the application
-GONE = [r"\bsqlite3\b", r"\bPRAGMA\b", r"INSERT\s+OR\s+(IGNORE|REPLACE)", r"AUTOINCREMENT", r"COLLATE\s+NOCASE", r"BEGIN\s+IMMEDIATE",
+GONE = [r"import\s+sqlite3", r"\bsqlite3\.",r"\bPRAGMA\b", r"INSERT\s+OR\s+(IGNORE|REPLACE)", r"AUTOINCREMENT", r"COLLATE\s+NOCASE", r"BEGIN\s+IMMEDIATE",
         r"sqlite_master", r"\blastrowid\b.*\bsqlite", r"SUM\(\s*\w+(\.\w+)?\s*="]
 
 

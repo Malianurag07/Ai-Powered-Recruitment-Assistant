@@ -141,7 +141,7 @@ def test_inference_works_when_alias_renames_the_umbrella_skill():
 
 def test_deep_learning_is_not_an_alias_of_machine_learning_but_implies_it():
     from app.database import SEED_ALIASES
-    assert "deep learning" not in SEED_ALIASES
+    assert SEED_ALIASES["deep learning"] != SEED_ALIASES["machine learning"]          # its own canonical name, not folded into ML
     job = JobProfile(required_skills=["Machine Learning", "Deep Learning"])
     _, _, rows = skill_match(cand(skills=["Deep Learning"]), job, SEED_ALIASES)
     by = {r.skill: r.status for r in rows}
