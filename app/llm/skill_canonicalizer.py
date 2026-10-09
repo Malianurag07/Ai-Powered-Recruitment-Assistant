@@ -67,4 +67,4 @@ def canonicalize_profile(profile: CandidateProfile, aliases: dict[str, str], llm
 
 
 def save_learned(conn: sqlite3.Connection, learned: dict[str, str]) -> None:
-    conn.executemany("INSERT OR IGNORE INTO skill_aliases (alias, canonical, source) VALUES (?, ?, 'ai')", learned.items())
+    conn.executemany("INSERT INTO skill_aliases (alias, canonical, source) VALUES (?, ?, 'ai') ON CONFLICT (alias) DO NOTHING", learned.items())

@@ -12,6 +12,7 @@ import sqlite3
 import time
 
 from app import config
+from app.db import INTEGRITY_ERRORS, utc_now
 
 ROLES = ("admin", "recruiter")
 MIN_PASSWORD = 8
@@ -156,7 +157,7 @@ def create_user(conn, email: str, password: str, name: str = "", role: str = "re
         with conn:
             cur = conn.execute("INSERT INTO users (email, name, password_hash, role) VALUES (?,?,?,?)",
                                (email, (name or "").strip()[:100], hash_password(password), role))
-    except sqlite3.IntegrityError:
+    except INTEGRITY_ERRORS:
         raise AuthError("A user with that email already exists.")
     return get_user(conn, cur.lastrowid)
 
@@ -212,7 +213,7 @@ def authenticate(conn, email: str, password: str) -> dict:
         raise AuthError("Invalid email or password.")
     _fails.pop(email, None)
     with conn:
-        conn.execute("UPDATE users SET last_login_at=CURRENT_TIMESTAMP WHERE id=?", (row["id"],))
+        conn.execute("UPDATE users SET last_login_at=? WHERE id=?", (utc_now(), row["id"]))
     return get_user(conn, row["id"])
 
 

@@ -22,6 +22,8 @@ OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
 
 DATABASE_PATH = BASE_DIR / os.getenv("DATABASE_PATH", "data/recruitment.db")
+# Set DATABASE_URL (postgresql://user:password@host:5432/dbname) to use Postgres instead of the SQLite file above. Empty = SQLite.
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 
 # "cloud" = Groq + Gemini (default). "local" = every AI call goes to a self-hosted Ollama model (slower, offline, free).
 LLM_MODE = os.getenv("LLM_MODE", "cloud").lower()

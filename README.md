@@ -13,7 +13,7 @@ SQLite, open-source libraries).
 | **Backend** | Python, FastAPI, SQLite |
 | **Frontend** | HTML, Tailwind CSS (CDN), vanilla JavaScript. No build step |
 | **AI** | Groq (`qwen3.8-27b`, `gpt-oss-120b`) and Gemini (`gemini-3.1-flash-lite`); optional local Llama via Ollama |
-| **Tests** | 272 automated tests, no API keys needed to run them |
+| **Tests** | 315 automated tests, no API keys needed to run them |
 
 **Demo video:** https://drive.google.com/file/d/1xGxcIh01w392BSfrpsXGqaTh-zKKk3qz/view?usp=sharing
 
@@ -260,6 +260,8 @@ Full DDL: [`app/database.py`](app/database.py).
 resume for the same job is ignored; a *different* resume for the same job is held as `pending_choice` and the applicant
 chooses which one counts. The check runs under a write lock, so simultaneous uploads cannot double-activate.
 
+**Postgres (optional).** SQLite is the default and needs nothing. Set `DATABASE_URL=postgresql://user:password@host:5432/dbname` in `.env` and the same app runs on Postgres (schema created automatically; a thin adapter in `app/db.py` lets the existing queries run unchanged). It was written and checked without a Postgres server available: the schema is proven equal to the SQLite one by a test, and the adapter is unit-tested with a fake driver, but the 14 tests in `tests/test_postgres.py` (skipped until `TEST_DATABASE_URL` is set) have not yet been run on a real server. Details, status and first-run steps: [`docs/POSTGRES.md`](docs/POSTGRES.md).
+
 ## 7. Natural-language query handling
 
 1. **Plan.** A fast model turns the question (plus recent chat) into JSON: which tools to call and with what arguments.
@@ -299,7 +301,7 @@ shows exactly what was stored.
 Useful commands:
 
 ```bash
-python -m pytest tests -q                        # 272 tests, no API keys needed
+python -m pytest tests -q                        # 315 tests, no API keys needed (plus 14 Postgres tests that need a server)
 python scripts/demo_pipeline.py                  # rebuild the database from data/sample_resumes (live AI, ~2 min)
 python scripts/match_jd.py data/job_descriptions/ai_ml_intern.txt   # add a job to the existing database
 python scripts/test_queries.py                   # 25 live chat questions
@@ -341,7 +343,7 @@ Sample data: `data/sample_resumes/` (7 real resumes shared with permission, 3 sy
 
 ## 11. Testing, performance and comparison with commercial tools
 
-- **272 automated tests** cover parsing (including hostile files), extraction and validation, verification, scoring, duplicates and the concurrency race, the query tools (with injection attempts), hybrid retrieval, exports (with spreadsheet-injection checks), the API, and resilience.
+- **315 automated tests** cover parsing (including hostile files), extraction and validation, verification, scoring, duplicates and the concurrency race, the query tools (with injection attempts), hybrid retrieval, exports (with spreadsheet-injection checks), the API, and resilience.
 - **Quality-assurance suites:** `scripts/qa_offline.py` (43 cases, no AI quota: messy files, duplicates, API security and load) and `scripts/qa_live.py` (63 cases on the real AI: extraction accuracy, ranking, fairness, prompt injection, chat). Every failure they found (a verifier that overwrote correct years, invisible keyword-stuffing text, missed header and link contact details, missing security headers, logout not ending sessions, and non-technical jobs scoring near 0% on skills) was fixed and is covered by a unit test. Results are in `docs/qa_results/`. Line coverage of `app/` is 92%.
 - **Measured performance and accuracy** on this project's own data: [`docs/BENCHMARK.md`](docs/BENCHMARK.md).
 - **How this compares with commercial recruiting software**, on architecture and efficiency, and where it falls short: [`docs/COMPARISON.md`](docs/COMPARISON.md).
@@ -385,7 +387,7 @@ Sample data: `data/sample_resumes/` (7 real resumes shared with permission, 3 sy
 
 ```
 app/
-  main.py, deps.py, config.py, database.py, models.py
+  main.py, deps.py, config.py, database.py, db.py, models.py
   parsing/    pdf_extractor, docx_extractor, document_extractor, ocr
   llm/        client, prompts, extraction, verification, skill_canonicalizer, jd_parsing, scoring,
               retrieval, query_tools, query_engine
@@ -393,7 +395,7 @@ app/
   services/   candidate_service, dedupe, skill_normalizer, read_models, auth_service, quota
 frontend/     index.html, styles.css, app.js
 scripts/      demo_pipeline, match_jd, test_queries, benchmark, qa_offline, qa_live, qa_common, qa_report
-tests/        272 tests (fake LLMs; no network)
+tests/        315 tests (fake LLMs; no network), plus tests/test_postgres.py (needs a Postgres server)
 docs/         SCORING.md, PROMPTS.md, BENCHMARK.md, COMPARISON.md, qa_results/
 data/         sample_resumes/, job_descriptions/, sample job description
 ```

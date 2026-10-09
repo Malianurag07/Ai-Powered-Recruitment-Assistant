@@ -13,6 +13,7 @@ from datetime import date
 
 from app import config
 from app.database import get_connection
+from app.db import is_postgres
 
 # AI calls one resume costs, by quota bucket (measured about 6.6 to 8: extraction + name matching, meaning match + judge samples,
 # second-check + embeddings). Used only for planning; the real pipeline is unchanged.
@@ -29,6 +30,8 @@ _last_rate_limited = 0.0
 
 def _conn() -> sqlite3.Connection:
     conn = get_connection(check_same_thread=False)
+    if is_postgres(conn):                      # on Postgres the table is created with the rest of the schema
+        return conn
     conn.execute("CREATE TABLE IF NOT EXISTS ai_usage (day TEXT NOT NULL, bucket TEXT NOT NULL, calls INTEGER NOT NULL DEFAULT 0, "
                  "PRIMARY KEY (day, bucket))")
     return conn

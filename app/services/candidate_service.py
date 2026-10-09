@@ -200,10 +200,17 @@ def set_job_weights(conn: sqlite3.Connection, job_id: int, percent: dict | None)
 # ---------------------------------------------------------------- resumes
 def _store_analysis(conn, app_id: int, job_id: int, s: ScoreResult) -> None:
     conn.execute(
-        """INSERT OR REPLACE INTO analysis_results
+        """INSERT INTO analysis_results
            (application_id, job_description_id, match_score, skill_match_ratio, component_scores, skill_breakdown,
             llm_status, matching_skills, missing_skills, strengths, weaknesses, summary, interview_questions, recommendation)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+           ON CONFLICT (application_id) DO UPDATE SET
+             job_description_id = excluded.job_description_id, match_score = excluded.match_score,
+             skill_match_ratio = excluded.skill_match_ratio, component_scores = excluded.component_scores,
+             skill_breakdown = excluded.skill_breakdown, llm_status = excluded.llm_status,
+             matching_skills = excluded.matching_skills, missing_skills = excluded.missing_skills,
+             strengths = excluded.strengths, weaknesses = excluded.weaknesses, summary = excluded.summary,
+             interview_questions = excluded.interview_questions, recommendation = excluded.recommendation""",
         (app_id, job_id, s.match_score, s.skill_match_ratio, json.dumps(s.components),
          json.dumps([r.__dict__ for r in s.skill_breakdown]), s.llm_status, json.dumps(s.matching_skills),
          json.dumps(s.missing_skills), json.dumps(s.strengths), json.dumps(s.weaknesses), s.summary,

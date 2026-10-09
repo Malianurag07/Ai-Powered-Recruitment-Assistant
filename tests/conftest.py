@@ -3,6 +3,7 @@ import os
 
 os.environ["AUTH_ENABLED"] = "0"          # login is on by default; the general tests run without it (test_auth.py turns it on explicitly)
 os.environ["SEMANTIC_INDEXING"] = "0"     # tests must never call the real embedding API (set before app.config loads)
+os.environ["DATABASE_URL"] = ""          # tests use SQLite even if the developer's .env points at Postgres (see tests/test_postgres.py for the real thing)
 os.environ["OCR_ENABLED"] = "0"           # tests must never call the real vision API; OCR tests inject a fake reader
 import json
 import sqlite3

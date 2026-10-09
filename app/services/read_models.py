@@ -24,7 +24,8 @@ def list_jobs(conn: sqlite3.Connection, owner_id: int | None = None, include_own
     for r in conn.execute(f"""SELECT j.id, j.title, j.created_at, u.email AS owner FROM job_descriptions j
                               LEFT JOIN users u ON u.id = j.owner_id {where} ORDER BY j.id DESC""", args):    # noqa: S608 (fixed text)
         counts = conn.execute(
-            """SELECT SUM(application_status='active') AS active, SUM(application_status='pending_choice') AS pending
+            """SELECT SUM(CASE WHEN application_status='active' THEN 1 ELSE 0 END) AS active,
+                      SUM(CASE WHEN application_status='pending_choice' THEN 1 ELSE 0 END) AS pending
                FROM applications WHERE job_description_id=?""", (r["id"],)).fetchone()
         scored = conn.execute("SELECT COUNT(*) FROM analysis_results WHERE job_description_id=?", (r["id"],)).fetchone()[0]
         jobs.append({"id": r["id"], "title": r["title"], "created_at": r["created_at"], "scored": scored,

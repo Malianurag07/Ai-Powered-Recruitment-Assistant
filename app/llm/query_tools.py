@@ -256,11 +256,11 @@ def search_resume_text(ctx: Ctx, keyword: str, limit: int = 10) -> dict:
     kw = keyword.strip()
     if len(kw) < 2:
         return {"error": "Keyword too short"}
-    like = "%" + kw.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_") + "%"
+    like = ("%" + kw.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_") + "%").lower()      # compared with lower(raw_text): same on both databases
     rows = ctx.conn.execute(
         """SELECT c.name, a.raw_text FROM applications a JOIN candidates c ON c.id = a.candidate_id
            JOIN analysis_results r ON r.application_id = a.id
-           WHERE a.job_description_id = ? AND a.application_status = 'active' AND a.raw_text LIKE ? ESCAPE '\\' LIMIT ?""",
+           WHERE a.job_description_id = ? AND a.application_status = 'active' AND lower(a.raw_text) LIKE ? ESCAPE '\\' LIMIT ?""",
         (ctx.job_id, like, max(1, min(int(limit), 25)))).fetchall()
     hits = []
     for r in rows:
