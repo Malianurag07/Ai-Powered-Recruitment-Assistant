@@ -252,4 +252,6 @@ class PgConnection:
 def connect_pg(url: str) -> PgConnection:
     if _psycopg is None:
         raise RuntimeError('DATABASE_URL is set but the Postgres driver is not installed. Run:  pip install "psycopg[binary]"')
-    return PgConnection(_psycopg.connect(url, autocommit=True, connect_timeout=10, application_name="shortlist"))
+    # prepare_threshold=None: no automatic server-side prepared statements, so a connection pooler in "transaction mode" (the usual
+    # hosted setup, e.g. Supabase port 6543 or any pgbouncer) cannot trip over them. Connections here are short-lived anyway.
+    return PgConnection(_psycopg.connect(url, autocommit=True, connect_timeout=10, application_name="shortlist", prepare_threshold=None))

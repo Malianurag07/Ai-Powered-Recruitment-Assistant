@@ -39,6 +39,7 @@ def test_database_url_gives_a_connection_opened_the_safe_way(fake_pg):
     url, kwargs = fake_pg.calls[0]
     assert url == "postgresql://u:p@db.example:5432/shortlist"
     assert kwargs["autocommit"] is True and kwargs["connect_timeout"] == 10        # transactions are managed by the adapter; no endless hangs
+    assert kwargs["prepare_threshold"] is None                                      # safe behind a transaction-mode connection pooler
 
 
 def test_missing_driver_gives_a_clear_message(monkeypatch):
