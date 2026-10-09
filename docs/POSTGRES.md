@@ -1,83 +1,71 @@
-# Using Postgres instead of SQLite
+# PostgreSQL
 
-SQLite stays the default: with nothing set, the app uses the file `data/recruitment.db` exactly as before. Setting `DATABASE_URL`
-switches the whole app to Postgres. No data is copied across (see the end of this file).
+PostgreSQL is the app's only database. The first version used SQLite; it was removed on 2026-10-09 and nothing in `app/` refers to it any more.
 
-## Status: written and checked, but NOT yet run against a real Postgres server
+## Status: written and checked, but NOT yet run against a real PostgreSQL server
 
-The migration was done without a Postgres server available, so what has and has not been verified is stated plainly:
+The migration was done without a server available, so here is exactly what has and has not been verified.
 
-| Verified (automated, no server needed) | Not verified until you connect a server |
+| Verified now (no server needed) | Not verified until you connect a server |
 |---|---|
-| SQLite still passes everything (the whole suite, plus new portability checks) | That `SCHEMA_PG` is accepted by Postgres and creates all 12 tables |
-| `SCHEMA_PG` describes the same tables, columns, types, keys, indexes and cascades as `SCHEMA` (`tests/test_postgres_schema.py`, with mutation checks that it catches drift) | Every SQL statement the app sends, on real Postgres rules (type strictness, `GROUP BY`, aborted transactions) |
-| The adapter's logic: `?` to `%s`, rows by name or position, `lastrowid`, commit and rollback, the write lock, NUL removal (`tests/test_pg_adapter.py`, fake driver) | The advisory lock under real concurrency |
-| Wiring: `DATABASE_URL` selects Postgres, startup creates the schema, a missing driver gives a clear message (`tests/test_pg_wiring.py`) | Speed, connection limits, SSL |
-| No SQLite-only syntax left outside the places written to handle it (`tests/test_portability.py`) | |
+| Every table, column, key, unique rule, cascade, index and check in `SCHEMA` covers what the app's SQL needs (`tests/test_schema_needs.py` reads all ~100 statements out of `app/` and checks them; mutation-tested: it catches a dropped column, key, cascade or required field) | That PostgreSQL accepts `SCHEMA` and creates all 12 tables |
+| `SCHEMA` covers **everything in the old live SQLite file**: 12 tables, 91 columns, with matching types, nullability, defaults, primary keys, foreign keys with cascades, and the 3 indexes (checked once against `data/recruitment.db`, then pinned in a test) | Every SQL statement the app sends, under PostgreSQL's stricter rules |
+| The old file's data fits PostgreSQL's rules: no NUL characters, no bad roles, no duplicate emails, no double-active resumes, no text in numeric columns, all dates in one format | The advisory lock under real concurrency |
+| The adapter's logic with a fake driver: `?` to `%s`, rows by name or position, `lastrowid`, commit and rollback, the write lock, NUL removal (`tests/test_pg_adapter.py`) | Speed, connection limits, SSL |
+| Wiring: `DATABASE_URL` selects the database, startup creates the schema, a missing URL or driver gives a clear message (`tests/test_pg_wiring.py`) | The tests that need the database (about 155) have never run |
+| Nothing SQLite-specific is left in `app/` (`tests/test_portability.py`) | |
 
-The 14 tests in `tests/test_postgres.py` cover the right-hand column. They are skipped until you set `TEST_DATABASE_URL`.
+**Every test that touches the database is skipped until `TEST_DATABASE_URL` is set**, because the tests used to run on an in-memory SQLite
+database and that is gone. So today `pytest` shows about 176 passed and 155 skipped; the skipped ones are the safety net you do not have yet.
 
-## Switching on
+## Setup
 
-1. Install the driver: `pip install -r requirements.txt` (adds `psycopg[binary]`).
-2. Create an empty database and put its address in `.env`:
-   `DATABASE_URL=postgresql://user:password@host:5432/dbname` (use `?sslmode=require` on a hosted database).
-3. Start the app. `init_db()` creates the tables, adds any columns a newer release needs, and seeds the skill aliases. It is safe to run on every start.
-4. Remove `DATABASE_URL` to go back to SQLite; the SQLite file is untouched.
+1. `pip install -r requirements.txt` (includes `psycopg[binary]`).
+2. Create an empty PostgreSQL database (13 or newer) and put its address in `.env`:
+   `DATABASE_URL=postgresql://user:password@host:5432/dbname` (add `?sslmode=require` on a hosted one).
+3. Start the app: `uvicorn app.main:app --reload`. `init_db()` creates the tables, adds any columns a newer release needs, and seeds the skill
+   aliases. It is safe to run on every start. Without `DATABASE_URL` the app stops with a message saying so.
 
-## First run: what to do and what to expect
+## First run: do this before trusting anything
 
 ```bash
-# the real checks, against a database you can throw away (each test makes and drops its own schema; the role needs CREATE SCHEMA)
-TEST_DATABASE_URL=postgresql://user:password@localhost:5432/postgres python -m pytest tests/test_postgres.py -v
-python -m pytest tests -q          # the normal suite must still pass (it always uses SQLite)
+# a database where the role may CREATE SCHEMA; each test makes its own throw-away schema and drops it, so nothing existing is touched
+TEST_DATABASE_URL=postgresql://user:password@localhost:5432/postgres python -m pytest tests -v
 ```
 
-These tests were written without being able to run them, so a first failure may be a mistake in a test as well as in the app. Read the
-message, decide which, fix it, and re-run. Likely places for surprises: a query Postgres is stricter about, `BYTEA` values, the
-advisory lock test, and the per-request connection cost.
+Expect to fix things: the roughly 155 database tests, and the 14 in `tests/test_postgres.py`, were written or ported without ever being run, so a failure
+may be a mistake in a test as well as in the app. Read the message and decide which. Likely places: a query PostgreSQL is stricter about
+(types, `GROUP BY`), `BYTEA` values, the advisory-lock concurrency test, and the cost of one connection per request.
 
-## What changed in the code
+The QA suites and the benchmark (`scripts/qa_offline.py`, `qa_live.py`, `benchmark.py`) also use throw-away schemas in `TEST_DATABASE_URL`.
+`scripts/demo_pipeline.py --wipe` EMPTIES the database named by `DATABASE_URL` (accounts included) and refuses to run without the flag.
 
-* `app/db.py` (new): the adapter. `PgConnection` behaves like a `sqlite3.Connection` for what the app uses.
-  * `?` is translated to `%s`, and a literal `%` to `%%`.
-  * Rows read by name and by position, and `dict(row)` works.
-  * `cursor.lastrowid` works by adding `RETURNING id` to inserts into tables that have an `id`.
-  * Transactions begin at the first write, so reading never leaves a connection "idle in transaction" during a 10 to 60 second AI call.
-  * `with conn:` commits on success, rolls back on error, and leaves the connection open (psycopg's own `with` would close it).
-  * `BEGIN IMMEDIATE` becomes a Postgres advisory lock held until commit or rollback; this keeps the duplicate-resume check and the insert atomic.
-  * The NUL character is removed from text (Postgres rejects it; PDF text can contain it).
-* `app/database.py`: `SCHEMA_PG`, `PG_UPGRADES`, a connection factory that returns the adapter when `DATABASE_URL` is set, and `_init_postgres()`.
-* SQL made portable, and still valid on SQLite: `INSERT OR IGNORE` and `INSERT OR REPLACE` became `ON CONFLICT`; `SUM(boolean)` became
-  `SUM(CASE ...)`; the resume text search lowercases both sides (Postgres `LIKE` is case-sensitive); the login timestamp comes from one
-  Python function (`utc_now`) so both databases store the same text format; the duplicate-account error is caught as `INTEGRITY_ERRORS`.
+## How the code reaches PostgreSQL
 
-## Schema differences (all deliberate)
+`app/db.py` is a thin adapter, so the app's existing queries (written with `?` placeholders) run unchanged:
 
-| SQLite | Postgres |
-|---|---|
-| `INTEGER PRIMARY KEY AUTOINCREMENT` | `INTEGER GENERATED BY DEFAULT AS IDENTITY` (BY DEFAULT, so rows can be loaded with their old ids) |
-| `REAL` (8 bytes) | `DOUBLE PRECISION` (Postgres `REAL` is only 4 bytes) |
-| `BLOB` | `BYTEA` |
-| dates as text, default `CURRENT_TIMESTAMP` | still text, same `YYYY-MM-DD HH:MM:SS` UTC format, via `to_char(timezone('utc', now()), ...)` |
-| `COLLATE NOCASE` index | index on `lower(skill_name)` |
-| `ai_usage` created on first use | created with the rest of the schema |
+* `?` becomes `%s`, and a literal `%` becomes `%%`.
+* Rows read by name and by position, `dict(row)` works, and a row equals a tuple of its values.
+* `cursor.lastrowid` works by adding `RETURNING id` to inserts into tables that have an `id`.
+* Transactions begin at the first write, so reading never leaves a connection "idle in transaction" during a 10 to 60 second AI call.
+* `with conn:` commits on success, rolls back on error, and leaves the connection open (psycopg's own `with` would close it).
+* `conn.begin_exclusive()` starts a transaction and takes one app-wide advisory lock until commit or rollback; this keeps the duplicate-resume check and
+  the insert atomic.
+* The NUL character is removed from text (PostgreSQL rejects it; PDF text can contain it).
 
-JSON is still stored as text and parsed in Python, as before. Moving to `JSONB` is possible later and not needed.
+## Schema notes
 
-## Known limits of this version
+* Ids are `INTEGER GENERATED BY DEFAULT AS IDENTITY` ("by default" so rows can be loaded with their old ids).
+* Scores and years are `DOUBLE PRECISION` (PostgreSQL's `REAL` is only 4 bytes); search vectors are `BYTEA`.
+* Dates stay `TEXT` in `YYYY-MM-DD HH:MM:SS` UTC (the code and the page read them as text); JSON stays text and is parsed in Python.
+* The case-insensitive skill index is an index on `lower(skill_name)`. Resume text search lowercases both sides, because `LIKE` is case-sensitive here.
+* One active resume per person per job is a partial unique index; deleting a job or a resume cascades to everything under it.
 
-* **One connection per request, and per AI-call counter write.** There is no connection pool. That is fine for a small team and a database
-  in the same region; a remote database adds tens of milliseconds to each request. A pooler (the host's, or `psycopg_pool`) is the next step.
+## Known limits
+
+* **No connection pool:** one connection per request and per AI-call counter write. Fine for a small team with the database nearby; a pooler (the host's, or `psycopg_pool`) is the next step.
 * **In-memory state is still per process:** the live Groq limit reading and the login lockouts. Run one app process, or move them into the database.
-* **The scripts** (`scripts/demo_pipeline.py`, `benchmark.py`, `qa_*.py`) build their own temporary SQLite database and ignore `DATABASE_URL`.
-* **No data is migrated.** The existing `data/recruitment.db` stays as it is.
-
-## If you later want the existing data in Postgres
-
-The tables must be copied in dependency order, naming every column (the live SQLite file has `owner_id`, `weights` and `cutoffs` at the
-end of `job_descriptions`, so copying by position would shift columns): `users`, `skill_aliases`, `candidates`, `job_descriptions`,
-`job_required_skills`, `applications`, `application_skills`, `resume_chunks`, `analysis_results`, `verification_log`, `chat_history`,
-`ai_usage`. Because ids are inserted explicitly, afterwards run
-`SELECT setval(pg_get_serial_sequence('table', 'id'), (SELECT max(id) FROM table));` for every table with an `id`, then compare row counts and
-the ranking each job returns before switching over. Keep the SQLite file until that matches.
+* **No data was migrated.** The old `data/recruitment.db` is still on disk (git-ignored) and nothing reads it. If you want its contents in PostgreSQL, copy the
+  tables in dependency order naming every column (`users`, `skill_aliases`, `candidates`, `job_descriptions`, `job_required_skills`, `applications`,
+  `application_skills`, `resume_chunks`, `analysis_results`, `verification_log`, `chat_history`, `ai_usage`), then run
+  `SELECT setval(pg_get_serial_sequence('table', 'id'), (SELECT max(id) FROM table));` for every table with an `id`, and compare row counts and each job's ranking before relying on it.

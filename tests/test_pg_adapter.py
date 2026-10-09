@@ -1,11 +1,10 @@
 """The Postgres adapter (app/db.py), tested with a fake driver: no Postgres server is needed or contacted."""
 import re
-import sqlite3
 
 import pytest
 
 from app import db
-from app.database import SCHEMA_PG
+from app.database import SCHEMA
 from app.db import ID_TABLES, PgConnection, PgRow, translate_sql
 
 
@@ -121,7 +120,7 @@ def test_insert_skipped_by_on_conflict_gives_no_id():
 
 
 def test_every_table_with_an_identity_column_is_listed_in_id_tables():
-    with_identity = set(re.findall(r"CREATE TABLE IF NOT EXISTS (\w+) \(\s*id INTEGER GENERATED", SCHEMA_PG))
+    with_identity = set(re.findall(r"CREATE TABLE IF NOT EXISTS (\w+) \(\s*id INTEGER GENERATED", SCHEMA))
     assert with_identity == set(ID_TABLES)
 
 
@@ -155,9 +154,9 @@ def test_with_block_commits_on_success_rolls_back_on_error_and_keeps_the_connect
     assert raw.sql().count("COMMIT") == commits_before and raw.sql()[-1] == "SELECT 1"
 
 
-def test_begin_immediate_starts_a_transaction_and_takes_the_write_lock():
+def test_begin_exclusive_starts_a_transaction_and_takes_the_write_lock():
     conn, raw = conn_with()
-    conn.execute("BEGIN IMMEDIATE")
+    conn.begin_exclusive()
     assert conn.in_transaction and raw.sql() == ["BEGIN", "SELECT pg_advisory_xact_lock(%s)"]
     assert raw.log[-1][2] == (db.WRITE_LOCK_KEY,)
     conn.execute("INSERT INTO candidates (name) VALUES (?)", ("A",))
@@ -192,8 +191,12 @@ def test_executescript_commits_first_then_sends_the_script_whole():
 
 def test_utc_now_and_integrity_errors():
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", db.utc_now())
-    assert sqlite3.IntegrityError in db.INTEGRITY_ERRORS
-    assert db.is_postgres(PgConnection(FakeRaw())) and not db.is_postgres(sqlite3.connect(":memory:"))
+    assert isinstance(db.INTEGRITY_ERRORS, tuple) and db.INTEGRITY_ERRORS and all(issubclass(e, Exception) for e in db.INTEGRITY_ERRORS)
+
+
+def test_a_row_equals_a_plain_tuple_of_its_values():
+    r = PgRow(["a", "b"], (1, "x"))
+    assert r == (1, "x") and r != (1, "y") and r == PgRow(["a", "b"], (1, "x"))
 
 
 def test_nul_characters_are_removed_from_text_but_binary_data_is_untouched():

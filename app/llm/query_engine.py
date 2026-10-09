@@ -9,7 +9,6 @@ including the local Ollama model.
 """
 import json
 import re
-import sqlite3
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -18,6 +17,7 @@ from app.llm import client, prompts
 from app.llm.query_tools import Ctx, call_tool, catalog_text, load_candidates, resolve_names
 from app.services.candidate_service import get_job
 from app.services.skill_normalizer import load_aliases
+from app.db import PgConnection
 
 LLMFn = Callable[[str, str], str]
 MAX_CALLS = 4
@@ -41,7 +41,7 @@ def _answer_llm(system: str, user: str) -> str:
         system, user, [("gemini", GEMINI_CHAT_MODEL), ("groq", client.GROQ_MODEL)], json_mode=False)
 
 
-def _history(conn: sqlite3.Connection, job_id: int) -> list[dict]:
+def _history(conn: PgConnection, job_id: int) -> list[dict]:
     rows = conn.execute("SELECT role, content FROM chat_history WHERE job_description_id=? ORDER BY id DESC LIMIT ?",
                         (job_id, HISTORY_TURNS)).fetchall()
     return [dict(r) for r in reversed(rows)]
@@ -109,7 +109,7 @@ def keep_ambiguity(plan: dict, question: str, ctx: Ctx) -> dict:
     return plan
 
 
-def ask(conn: sqlite3.Connection, job_id: int, question: str, *, plan_llm: LLMFn | None = None,
+def ask(conn: PgConnection, job_id: int, question: str, *, plan_llm: LLMFn | None = None,
         answer_llm: LLMFn | None = None, remember: bool = True, embed_fn=None) -> Answer:
     question = question.strip()
     job = get_job(conn, job_id)

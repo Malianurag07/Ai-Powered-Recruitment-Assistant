@@ -1,4 +1,4 @@
-"""Measure the pipeline's own performance and accuracy. Uses a THROWAWAY database, never data/recruitment.db.
+"""Measure the pipeline's own performance and accuracy. Uses THROWAWAY schemas in the Postgres named by TEST_DATABASE_URL (dropped on exit).
 
 Run from the project root:   python scripts/benchmark.py
 Measures: per-stage latency, sequential vs parallel throughput, extraction accuracy against known ground truth,
@@ -17,8 +17,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 TMP = Path(tempfile.mkdtemp(prefix="shortlist_bench_"))
-os.environ["DATABASE_PATH"] = str(TMP / "bench.db")          # must be set before app.config is imported
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "scripts"))
+from pg_scratch import switch_to_new_scratch_schema, use_scratch_schema  # noqa: E402
+
+use_scratch_schema("bench")                                    # must happen before app.config is imported
 
 from app.database import get_connection, init_db  # noqa: E402
 from app.llm import query_engine  # noqa: E402
@@ -133,17 +136,16 @@ for r in rows[:5]:
     print(f"  repeat {r['f']:28} {runs}", flush=True)
 
 # ---------------------------------------------------------------- D. parallel throughput (fresh DB, 4 workers)
-os.environ["DATABASE_PATH"] = str(TMP / "bench_parallel.db")
 import app.config as cfg  # noqa: E402
 import app.database as dbm  # noqa: E402
-dbm.DATABASE_PATH = TMP / "bench_parallel.db"
+switch_to_new_scratch_schema("bench_par")
 dbm.init_db()
-pconn = dbm.get_connection(check_same_thread=False)
+pconn = dbm.get_connection()
 pjob, _ = svc.create_job(pconn, jd)
 
 
 def worker(fn):
-    c = dbm.get_connection(check_same_thread=False)
+    c = dbm.get_connection()
     try:
         return fn, svc.process_resume(c, (SAMPLES / fn).read_bytes(), fn, pjob).status
     finally:

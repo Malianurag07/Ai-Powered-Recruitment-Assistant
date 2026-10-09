@@ -1,11 +1,9 @@
 import json
 import re
-import sqlite3
 
 import pymupdf
 import pytest
 
-from app.database import SCHEMA, SEED_ALIASES
 from app.services import candidate_service as svc
 
 JD = "AI engineer role. Requires Python, Docker and SQL. Nice to have AWS. Freshers welcome. " * 2
@@ -44,13 +42,8 @@ LLMS = dict(extract_llm=fake_llm, verify_llm=fake_llm, canon_llm=fake_llm, score
 
 
 @pytest.fixture
-def conn():
-    c = sqlite3.connect(":memory:")
-    c.row_factory = sqlite3.Row
-    c.execute("PRAGMA foreign_keys = ON")
-    c.executescript(SCHEMA)
-    c.executemany("INSERT INTO skill_aliases (alias, canonical) VALUES (?, ?)", SEED_ALIASES.items())
-    return c
+def conn(pg):
+    return pg
 
 
 @pytest.fixture

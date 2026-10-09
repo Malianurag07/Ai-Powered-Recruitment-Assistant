@@ -1,4 +1,4 @@
-"""SQL that must behave the same on SQLite and Postgres (step 2 of the Postgres migration) and a scanner that keeps it that way."""
+"""Behaviour of the SQL the app depends on (case-insensitive text search, upserts, counts) and a guard that SQLite stays out of app/."""
 import json
 import re
 from pathlib import Path
@@ -55,22 +55,16 @@ def test_last_login_uses_the_shared_timestamp_format(pool):
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", stamp) and re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", utc_now())
 
 
-# ---- scanner: SQLite-only syntax may only live in the places that are written to handle it
-SQLITE_ONLY = {
-    r"INSERT\s+OR\s+(IGNORE|REPLACE)": set(),
-    r"\bPRAGMA\b": {"database.py", "db.py"},                # db.py only mentions it in its description
-    r"COLLATE\s+NOCASE": {"database.py"},
-    r"sqlite_master": set(),
-    r"\bBEGIN\s+IMMEDIATE\b": {"candidate_service.py", "db.py"},        # db.py translates it into a Postgres advisory lock
-    r"SUM\(\s*\w+(\.\w+)?\s*=": set(),                      # SUM of a comparison: not valid in Postgres
-}
+# ---- guard: SQLite must not creep back into the application
+GONE = [r"\bsqlite3\b", r"\bPRAGMA\b", r"INSERT\s+OR\s+(IGNORE|REPLACE)", r"AUTOINCREMENT", r"COLLATE\s+NOCASE", r"BEGIN\s+IMMEDIATE",
+        r"sqlite_master", r"\blastrowid\b.*\bsqlite", r"SUM\(\s*\w+(\.\w+)?\s*="]
 
 
-def test_no_sqlite_only_sql_outside_the_allowed_files():
+def test_no_sqlite_left_in_the_application():
     problems = []
     for path in APP.rglob("*.py"):
         text = path.read_text(encoding="utf-8")
-        for pattern, allowed in SQLITE_ONLY.items():
-            if re.search(pattern, text, re.I) and path.name not in allowed:
+        for pattern in GONE:
+            if re.search(pattern, text, re.I):
                 problems.append((path.relative_to(APP).as_posix(), pattern))
     assert not problems, problems

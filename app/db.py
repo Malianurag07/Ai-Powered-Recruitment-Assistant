@@ -1,48 +1,45 @@
-"""Database helpers shared by SQLite and Postgres.
+"""PostgreSQL access for the whole app: a thin adapter over the psycopg driver.
 
-The app was written against SQLite's `sqlite3` module. Rather than rewrite ~100 queries, Postgres is reached through a thin adapter
-(`PgConnection`) that behaves like a `sqlite3.Connection` for the things the app uses:
+The app's ~100 queries are written with `?` placeholders and use `cursor.lastrowid`, so rather than rewrite them, `PgConnection` provides:
 
   * `?` placeholders (translated to the driver's `%s`)
   * rows readable by name and by position, and convertible with `dict(row)`
   * `cursor.lastrowid` after an INSERT (done with `RETURNING id`)
   * `with conn:` commits on success and rolls back on error, and does NOT close the connection
   * transactions that begin at the first write, so a read never leaves a connection "idle in transaction" while the AI is working
-  * `BEGIN IMMEDIATE` as "take the write lock": here a Postgres advisory lock held until commit or rollback
-
-SQLite remains the default; this module's Postgres half is only used when DATABASE_URL is set.
+  * `conn.begin_exclusive()`: start a transaction and take the app-wide write lock (a Postgres advisory lock held until commit or rollback)
 """
 import re
-import sqlite3
 from datetime import datetime, timezone
 
-# Raised when a unique or foreign-key rule is broken. SQLite and Postgres use different classes, so code catches this tuple.
-INTEGRITY_ERRORS: tuple = (sqlite3.IntegrityError,)
-try:                                              # the Postgres driver is optional: only needed when DATABASE_URL is set
+try:                                              # the driver is installed from requirements.txt; imports of this module work without it
     import psycopg as _psycopg
-    INTEGRITY_ERRORS = (sqlite3.IntegrityError, _psycopg.IntegrityError)
-except ImportError:                               # pragma: no cover - depends on the environment
+except ImportError:                               # depends on the environment
     _psycopg = None
+
+
+class _DriverMissing(Exception):
+    """Placeholder so `except INTEGRITY_ERRORS` is valid even when the driver is not installed (it is never raised)."""
+
+
+# Raised when a unique, foreign-key or check rule is broken: code catches this tuple.
+INTEGRITY_ERRORS: tuple = (_psycopg.IntegrityError,) if _psycopg else (_DriverMissing,)
 
 # Tables whose primary key is an integer `id` (identity column); an INSERT into one of these can report the new id.
 ID_TABLES = frozenset({"candidates", "job_descriptions", "job_required_skills", "applications", "application_skills",
                        "resume_chunks", "analysis_results", "verification_log", "users", "chat_history"})
-WRITE_LOCK_KEY = 7_340_001            # arbitrary constant: every "BEGIN IMMEDIATE" in the app takes this one advisory lock
+WRITE_LOCK_KEY = 7_340_001            # arbitrary constant: everything that takes the write lock uses this one advisory lock
 _WRITES = {"INSERT", "UPDATE", "DELETE"}
 
 
 def utc_now() -> str:
-    """Current UTC time as 'YYYY-MM-DD HH:MM:SS': the same text SQLite's CURRENT_TIMESTAMP produces, so both databases store one format."""
+    """Current UTC time as 'YYYY-MM-DD HH:MM:SS': the same text format the schema's created_at columns default to."""
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-
-
-def is_postgres(conn) -> bool:
-    return bool(getattr(conn, "is_postgres", False))
 
 
 # ---------------------------------------------------------------- SQL translation
 def translate_sql(sql: str) -> str:
-    """SQLite-style SQL -> Postgres driver style: `?` becomes `%s`, and a literal `%` becomes `%%` (the driver treats `%` as special).
+    """The app's SQL (written with `?`) -> driver style: `?` becomes `%s`, and a literal `%` becomes `%%` (the driver treats `%` as special).
     Text inside quotes and `--` comments is left alone except for `%`."""
     out: list[str] = []
     i, n, quote = 0, len(sql), None
@@ -75,7 +72,7 @@ def translate_sql(sql: str) -> str:
 
 
 def _clean_params(params) -> tuple:
-    """Postgres refuses the NUL character (\x00) in text, which can appear in text pulled from a PDF; SQLite accepts it. Drop it."""
+    """Postgres refuses the NUL character (\x00) in text, which can appear in text pulled from a PDF. Drop it."""
     return tuple(p.replace(chr(0), "") if isinstance(p, str) else p for p in params)
 
 
@@ -91,7 +88,7 @@ def _insert_table(sql: str) -> str | None:
 
 # ---------------------------------------------------------------- rows
 class PgRow:
-    """Like sqlite3.Row: `row["name"]`, `row[0]`, `row.keys()`, `dict(row)`, `len(row)`, iteration over values."""
+    """A result row: `row["name"]`, `row[0]`, `row.keys()`, `dict(row)`, `len(row)`, iteration over values."""
     __slots__ = ("_names", "_values", "_index")
 
     def __init__(self, names: list[str], values: tuple):
@@ -117,6 +114,8 @@ class PgRow:
         return len(self._values)
 
     def __eq__(self, other):
+        if isinstance(other, tuple):
+            return self._values == other
         return isinstance(other, PgRow) and self._names == other._names and self._values == other._values
 
     def __hash__(self):
@@ -137,9 +136,6 @@ class PgCursor:
     def execute(self, sql: str, params=()):
         conn, kind = self._conn, _first_word(sql)
         self.lastrowid = None
-        if kind == "BEGIN":                                      # "BEGIN IMMEDIATE": start a transaction and take the app-wide write lock
-            conn._begin(lock=True)
-            return self
         if kind in _WRITES:
             conn._begin()
         pg_sql, want_id = translate_sql(sql), False
@@ -197,8 +193,6 @@ class PgCursor:
 
 
 class PgConnection:
-    is_postgres = True
-
     def __init__(self, raw):
         self._raw = raw                      # a psycopg connection opened with autocommit=True: transactions are managed here
         self._in_tx = False
@@ -219,6 +213,10 @@ class PgConnection:
     def executescript(self, script: str) -> None:
         self.commit()
         self._raw.execute(script)            # no parameters, so several statements may be sent at once
+
+    def begin_exclusive(self) -> None:
+        """Start a transaction and take the app-wide write lock, held until commit or rollback. Used where a check and a write must be atomic."""
+        self._begin(lock=True)
 
     def _begin(self, lock: bool = False) -> None:
         if not self._in_tx:
@@ -248,7 +246,7 @@ class PgConnection:
 
     def __exit__(self, exc_type, exc, tb) -> bool:
         self.commit() if exc_type is None else self.rollback()
-        return False                          # never swallow the error, never close the connection (same as sqlite3)
+        return False                          # never swallow the error, never close the connection
 
 
 def connect_pg(url: str) -> PgConnection:

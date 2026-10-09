@@ -5,15 +5,15 @@ scored against the job, and ranked, and every number can be explained. Recruiter
 language ("Which candidates are missing Docker?", "Why is Jeevan ranked above Priya?") and get answers backed by real
 database queries, with reasoning.
 
-Built for the *AI-Powered Recruitment Assistant* technical assessment, at **zero cost** (free-tier Groq and Gemini APIs,
-SQLite, open-source libraries).
+Built for the *AI-Powered Recruitment Assistant* technical assessment, on free-tier Groq and Gemini APIs, PostgreSQL and
+open-source libraries.
 
 | | |
 |---|---|
-| **Backend** | Python, FastAPI, SQLite |
+| **Backend** | Python, FastAPI, PostgreSQL |
 | **Frontend** | HTML, Tailwind CSS (CDN), vanilla JavaScript. No build step |
 | **AI** | Groq (`qwen3.8-27b`, `gpt-oss-120b`) and Gemini (`gemini-3.1-flash-lite`); optional local Llama via Ollama |
-| **Tests** | 315 automated tests, no API keys needed to run them |
+| **Tests** | 331 automated tests, no API keys needed; those that touch the database need a PostgreSQL server (see section 8) |
 
 **Demo video:** https://drive.google.com/file/d/1xGxcIh01w392BSfrpsXGqaTh-zKKk3qz/view?usp=sharing
 
@@ -42,7 +42,7 @@ automates the screening step end to end:
 - **Parse** resumes (PDF, DOCX) and job descriptions (PDF, DOCX, TXT, pasted text) into structured data.
 - **Evaluate** each candidate against a job: match score 0-100, matching and missing skills, strengths, weaknesses,
   summary, interview questions, and a Shortlist / Consider / Reject recommendation.
-- **Store** everything in a normalized SQLite database, one clean record per person.
+- **Store** everything in a normalized PostgreSQL database, one clean record per person.
 - **Answer** recruiter questions in natural language, grounded in stored data, with reasoning.
 - **Explain** itself: score components, per-skill colour badges, and a log of every automatic correction.
 
@@ -65,7 +65,7 @@ flowchart TD
         P3 --> P4["4. Skill normalisation<br/>alias table + AI for unknown skills"]
         P4 --> P5["5. Duplicate check<br/>same email/phone, per job"]
         P5 --> P6["6. Scoring<br/>skills + experience in code,<br/>fit judged by AI (median of 3)"]
-        P6 --> P7[("SQLite<br/>candidates, applications, skills, scores,<br/>verification log, chat history, users")]
+        P6 --> P7[("PostgreSQL<br/>candidates, applications, skills, scores,<br/>verification log, chat history, users")]
     end
 
     subgraph ChatFlow["Chat (query_engine)"]
@@ -109,6 +109,9 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
+You also need a **PostgreSQL** database (version 13 or newer): a local install, or a hosted one. Create an empty database and note its
+address, for example `postgresql://user:password@localhost:5432/shortlist`. The app creates its own tables on first start.
+
 Get two free API keys (no credit card):
 
 | Key | Where | Used for |
@@ -118,7 +121,7 @@ Get two free API keys (no credit card):
 
 ```bash
 copy .env.example .env            # macOS/Linux: cp .env.example .env
-# then open .env and paste your two keys (never commit .env)
+# then open .env and paste your two keys and your DATABASE_URL (never commit .env)
 ```
 
 Model names change often. If a model returns 404 for your account, list what you can use and edit `.env`:
@@ -260,7 +263,7 @@ Full DDL: [`app/database.py`](app/database.py).
 resume for the same job is ignored; a *different* resume for the same job is held as `pending_choice` and the applicant
 chooses which one counts. The check runs under a write lock, so simultaneous uploads cannot double-activate.
 
-**Postgres (optional).** SQLite is the default and needs nothing. Set `DATABASE_URL=postgresql://user:password@host:5432/dbname` in `.env` and the same app runs on Postgres (schema created automatically; a thin adapter in `app/db.py` lets the existing queries run unchanged). It was written and checked without a Postgres server available: the schema is proven equal to the SQLite one by a test, and the adapter is unit-tested with a fake driver, but the 14 tests in `tests/test_postgres.py` (skipped until `TEST_DATABASE_URL` is set) have not yet been run on a real server. Details, status and first-run steps: [`docs/POSTGRES.md`](docs/POSTGRES.md).
+**PostgreSQL is the only database.** Set `DATABASE_URL=postgresql://user:password@host:5432/dbname` in `.env`; the app creates its tables on start. The app talks to it through a thin adapter in `app/db.py` that lets the existing queries run unchanged. The migration from an earlier SQLite version was written and checked without a Postgres server available: the schema is checked against every SQL statement in the app by a test that needs no server (`tests/test_schema_needs.py`), and the adapter is unit-tested with a fake driver, but the tests that run against a real server (`TEST_DATABASE_URL`) have not yet been run. Details, status and first-run steps: [`docs/POSTGRES.md`](docs/POSTGRES.md).
 
 ## 7. Natural-language query handling
 
@@ -301,11 +304,11 @@ shows exactly what was stored.
 Useful commands:
 
 ```bash
-python -m pytest tests -q                        # 315 tests, no API keys needed (plus 14 Postgres tests that need a server)
-python scripts/demo_pipeline.py                  # rebuild the database from data/sample_resumes (live AI, ~2 min)
+python -m pytest tests -q                        # 331 tests; the ~155 that touch the database are skipped unless TEST_DATABASE_URL is set
+python scripts/demo_pipeline.py --wipe           # EMPTIES the database, then loads data/sample_resumes (live AI, ~2 min)
 python scripts/match_jd.py data/job_descriptions/ai_ml_intern.txt   # add a job to the existing database
 python scripts/test_queries.py                   # 25 live chat questions
-python scripts/benchmark.py                      # latency, throughput, accuracy, repeatability (temporary database)
+python scripts/benchmark.py                      # latency, throughput, accuracy, repeatability (throw-away schema in TEST_DATABASE_URL)
 ```
 
 Sample data: `data/sample_resumes/` (7 real resumes shared with permission, 3 synthetic, and 3 deliberately bad files),
@@ -336,14 +339,14 @@ Sample data: `data/sample_resumes/` (7 real resumes shared with permission, 3 sy
 - **Sequential per-request pipeline** (about 13 s and 6 to 7 AI calls per resume, measured on free tiers). Uploads from the UI go one file at a time with a short pause between resumes (longer while a provider is rate-limiting); there is no background job queue. A whole folder can be chosen or dropped (only PDF and Word files are used). Before a batch of 3 or more, the page estimates the AI calls needed against the free calls left today: Groq's remaining count is read from its own response headers, while Google reports none, so its figure is this app's own count against `GEMINI_CALLS_PER_DAY` (an estimate). If a provider runs out mid-batch the remaining files are marked "not processed" and can be uploaded later.
 - **Authentication is basic:** email and password with two roles. There is no single sign-on or OAuth, no email verification, no audit-grade access log, and the login lockout and sign-up limit are kept in memory (they reset when the server restarts).
 - **No bias audit.** Names and contact details are part of the text the AI reads. Automated screening tools can be legally regulated (see section 11); this project is a prototype and is **not** a compliant hiring system. A human must make the decision.
-- **English only; SQLite only** (single writer; fine for one recruiter, not for a large team).
+- **English only.** Needs a PostgreSQL server; there is no connection pool yet (one connection per request), which is fine for a small team.
 - The web page loads Tailwind and fonts from a CDN, so it needs internet access.
 - The self-hosted mode (3B Llama on CPU) is about 9x slower than the cloud models and was verified end to end on one resume only; treat its accuracy as unproven.
 - Semantic search was evaluated on 11 queries and 7 resumes: enough to justify building it, not enough to quote a general accuracy.
 
 ## 11. Testing, performance and comparison with commercial tools
 
-- **315 automated tests** cover parsing (including hostile files), extraction and validation, verification, scoring, duplicates and the concurrency race, the query tools (with injection attempts), hybrid retrieval, exports (with spreadsheet-injection checks), the API, and resilience.
+- **331 automated tests** cover parsing (including hostile files), extraction and validation, verification, scoring, duplicates and the concurrency race, the query tools (with injection attempts), hybrid retrieval, exports (with spreadsheet-injection checks), the API, and resilience.
 - **Quality-assurance suites:** `scripts/qa_offline.py` (43 cases, no AI quota: messy files, duplicates, API security and load) and `scripts/qa_live.py` (63 cases on the real AI: extraction accuracy, ranking, fairness, prompt injection, chat). Every failure they found (a verifier that overwrote correct years, invisible keyword-stuffing text, missed header and link contact details, missing security headers, logout not ending sessions, and non-technical jobs scoring near 0% on skills) was fixed and is covered by a unit test. Results are in `docs/qa_results/`. Line coverage of `app/` is 92%.
 - **Measured performance and accuracy** on this project's own data: [`docs/BENCHMARK.md`](docs/BENCHMARK.md).
 - **How this compares with commercial recruiting software**, on architecture and efficiency, and where it falls short: [`docs/COMPARISON.md`](docs/COMPARISON.md).
@@ -395,7 +398,7 @@ app/
   services/   candidate_service, dedupe, skill_normalizer, read_models, auth_service, quota
 frontend/     index.html, styles.css, app.js
 scripts/      demo_pipeline, match_jd, test_queries, benchmark, qa_offline, qa_live, qa_common, qa_report
-tests/        315 tests (fake LLMs; no network), plus tests/test_postgres.py (needs a Postgres server)
+tests/        331 tests (fake LLMs; no network); those that use the database need TEST_DATABASE_URL
 docs/         SCORING.md, PROMPTS.md, BENCHMARK.md, COMPARISON.md, qa_results/
 data/         sample_resumes/, job_descriptions/, sample job description
 ```

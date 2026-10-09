@@ -3,16 +3,20 @@ import os
 
 os.environ["AUTH_ENABLED"] = "0"          # login is on by default; the general tests run without it (test_auth.py turns it on explicitly)
 os.environ["SEMANTIC_INDEXING"] = "0"     # tests must never call the real embedding API (set before app.config loads)
-os.environ["DATABASE_URL"] = ""          # tests use SQLite even if the developer's .env points at Postgres (see tests/test_postgres.py for the real thing)
+os.environ["DATABASE_URL"] = ""          # never let a developer's .env point the tests at a real database: tests use TEST_DATABASE_URL, in throw-away schemas
 os.environ["OCR_ENABLED"] = "0"           # tests must never call the real vision API; OCR tests inject a fake reader
 import json
-import sqlite3
+import uuid
 
 import pymupdf
 import pytest
 
-from app.database import SCHEMA, SEED_ALIASES
+from app import config, database, db
+from app.db import ID_TABLES
 from app.services import candidate_service as svc
+
+TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", "")
+NEEDS_DB = "needs a PostgreSQL server: set TEST_DATABASE_URL (see docs/POSTGRES.md)"
 
 JD_TEXT = "AI engineer role. Requires Python, Docker and SQL. Nice to have AWS. Freshers welcome. " * 2
 
@@ -45,14 +49,40 @@ def add_candidate(conn, job_id, name, email, phone, skills, years, internships=N
         extract_llm=lambda s, u: json.dumps(profile), verify_llm=_judge, canon_llm=_judge, score_llm=_judge)
 
 
+def schema_url(schema: str) -> str:
+    """The test database address, pointed at one throw-away schema (so nothing existing in that database is touched)."""
+    return TEST_DATABASE_URL + ("&" if "?" in TEST_DATABASE_URL else "?") + "options=-c%20search_path%3D" + schema
+
+
+def resync_ids(conn) -> None:
+    """After inserting rows with explicit ids, move every identity counter past them so the next ordinary insert does not collide."""
+    for table in ID_TABLES:
+        conn.execute(f"SELECT setval(pg_get_serial_sequence('{table}', 'id'), COALESCE((SELECT MAX(id) FROM {table}), 0) + 1, false)")
+    conn.commit()
+
+
 @pytest.fixture
-def pool():
+def pg(monkeypatch):
+    """A fresh, empty schema with the app's tables, seeds and upgrades created by init_db(); yields a connection; drops the schema afterwards.
+    Skipped when no test server is configured."""
+    if not TEST_DATABASE_URL:
+        pytest.skip(NEEDS_DB)
+    schema = "shortlist_test_" + uuid.uuid4().hex[:10]
+    admin = db.connect_pg(TEST_DATABASE_URL)
+    admin.execute(f"CREATE SCHEMA {schema}")
+    monkeypatch.setattr(config, "DATABASE_URL", schema_url(schema))
+    database.init_db()
+    conn = database.get_connection()
+    yield conn
+    conn.close()
+    admin.execute(f"DROP SCHEMA {schema} CASCADE")
+    admin.close()
+
+
+@pytest.fixture
+def pool(pg):
     """(conn, job_id) with five scored candidates. Two are named Ananya, to test ambiguity."""
-    conn = sqlite3.connect(":memory:", check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.executescript(SCHEMA)
-    conn.executemany("INSERT INTO skill_aliases (alias, canonical) VALUES (?, ?)", SEED_ALIASES.items())
+    conn = pg
     job_id, msg = svc.create_job(conn, JD_TEXT, canon_llm=_judge, jd_llm=_judge)
     assert job_id, msg
     add_candidate(conn, job_id, "Jeevan Raj", "jeevan@x.com", "9000000001",
@@ -63,4 +93,5 @@ def pool():
     add_candidate(conn, job_id, "Rahul Verma", "rahul@x.com", "9000000003", ["Java", "SQL", "Python"], 2)
     add_candidate(conn, job_id, "Ananya R K", "ananyark@x.com", "9000000004", ["Java", "Selenium"], 0)
     add_candidate(conn, job_id, "Ananya Iyer", "ananyai@x.com", "9000000005", ["Python", "Pandas"], 0)
+    conn.commit()
     return conn, job_id

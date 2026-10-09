@@ -1,5 +1,5 @@
 """Free-tier estimate: calls needed vs. left, verdicts, pause length, and Groq header parsing."""
-import sqlite3
+import re
 import time
 
 import pytest
@@ -10,16 +10,34 @@ from app.services import quota
 
 @pytest.fixture(autouse=True)
 def fresh(monkeypatch):
-    mem = sqlite3.connect(":memory:", check_same_thread=False)
-    mem.row_factory = sqlite3.Row
-    mem.execute("CREATE TABLE ai_usage (day TEXT NOT NULL, bucket TEXT NOT NULL, calls INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, bucket))")
+    store = {}                                                 # (day, bucket) -> calls: stands in for the ai_usage table
 
-    class Shared:                                              # _conn() hands out this one in-memory database; close() keeps it open
-        execute = staticmethod(mem.execute)
-        close = staticmethod(lambda: None)
-        __enter__ = lambda self: mem.__enter__()
-        __exit__ = lambda self, *a: mem.__exit__(*a)
-    monkeypatch.setattr(quota, "_conn", lambda: Shared())
+    class Result:
+        def __init__(self, row):
+            self.row = row
+
+        def fetchone(self):
+            return self.row
+
+    class FakeUsage:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def close(self):
+            pass
+
+        def execute(self, sql, params=()):
+            if sql.startswith("INSERT INTO ai_usage"):         # the upsert that counts one call
+                store[tuple(params)] = store.get(tuple(params), 0) + 1
+                return Result(None)
+            assert sql.startswith("SELECT calls FROM ai_usage"), sql
+            calls = store.get(tuple(params))
+            return Result(None if calls is None else {"calls": calls})
+
+    monkeypatch.setattr(quota, "_conn", lambda: FakeUsage())
     quota._headers.clear()
     monkeypatch.setattr(quota, "_last_rate_limited", 0.0)
     monkeypatch.setattr(config, "GROQ_FAST_CALLS_PER_DAY", 1000)
@@ -80,7 +98,7 @@ def test_pause_is_longer_right_after_a_rate_limit():
     assert quota.suggested_pause() > base
 
 
-def test_estimate_endpoint():
+def test_estimate_endpoint(pg):
     from fastapi.testclient import TestClient
     from app.main import app
     from app import deps

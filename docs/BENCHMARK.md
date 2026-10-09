@@ -63,7 +63,7 @@ Mean 4.3 s, maximum 9.0 s over five questions (one plan call, one SQL query, one
 
 ## Cost
 
-$0. Free tiers of Groq and Gemini, SQLite, open-source libraries.
+$0 for the AI: free tiers of Groq and Gemini and open-source libraries (the measurements here were taken on the earlier SQLite version).
 
 ## Caveats (important)
 

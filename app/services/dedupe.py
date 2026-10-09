@@ -8,8 +8,8 @@ Same person = same email OR same phone. Then, for one job:
 """
 import hashlib
 import re
-import sqlite3
 from dataclasses import dataclass
+from app.db import PgConnection
 
 NEW_CANDIDATE, NEW_APPLICATION, IDENTICAL, CONFLICT = "new_candidate", "new_application", "identical", "conflict"
 
@@ -32,7 +32,7 @@ class DedupeDecision:
     existing_application_id: int | None = None
 
 
-def find_candidate(conn: sqlite3.Connection, email: str | None, phone: str | None) -> int | None:
+def find_candidate(conn: PgConnection, email: str | None, phone: str | None) -> int | None:
     if email:
         row = conn.execute("SELECT id FROM candidates WHERE email = ?", (email.lower(),)).fetchone()
         if row:
@@ -45,7 +45,7 @@ def find_candidate(conn: sqlite3.Connection, email: str | None, phone: str | Non
     return None
 
 
-def decide(conn: sqlite3.Connection, email: str | None, phone: str | None,
+def decide(conn: PgConnection, email: str | None, phone: str | None,
            job_id: int, text: str) -> DedupeDecision:
     cid = find_candidate(conn, email, phone)
     if cid is None:
@@ -60,7 +60,7 @@ def decide(conn: sqlite3.Connection, email: str | None, phone: str | None,
     return DedupeDecision(CONFLICT, cid, active["id"])
 
 
-def resolve_conflict(conn: sqlite3.Connection, keep_application_id: int) -> None:
+def resolve_conflict(conn: PgConnection, keep_application_id: int) -> None:
     """Applicant picked which resume to keep: it becomes active, the other becomes superseded."""
     row = conn.execute("SELECT candidate_id, job_description_id FROM applications WHERE id=?",
                        (keep_application_id,)).fetchone()

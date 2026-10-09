@@ -5,11 +5,11 @@ call; its answers are validated and saved back to the table (source='ai'), so ea
 """
 import json
 import re
-import sqlite3
 from typing import Callable
 
 from app.llm import client, prompts
 from app.models import CandidateProfile
+from app.db import PgConnection
 
 LLMFn = Callable[[str, str], str]
 MAX_KNOWN_SHOWN = 120
@@ -66,5 +66,5 @@ def canonicalize_profile(profile: CandidateProfile, aliases: dict[str, str], llm
     return new, pairs, learned
 
 
-def save_learned(conn: sqlite3.Connection, learned: dict[str, str]) -> None:
+def save_learned(conn: PgConnection, learned: dict[str, str]) -> None:
     conn.executemany("INSERT INTO skill_aliases (alias, canonical, source) VALUES (?, ?, 'ai') ON CONFLICT (alias) DO NOTHING", learned.items())

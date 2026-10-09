@@ -8,11 +8,10 @@ import hashlib
 import hmac
 import json
 import secrets
-import sqlite3
 import time
 
 from app import config
-from app.db import INTEGRITY_ERRORS, utc_now
+from app.db import INTEGRITY_ERRORS, utc_now, PgConnection
 
 ROLES = ("admin", "recruiter")
 MIN_PASSWORD = 8
@@ -110,13 +109,13 @@ def _public(row) -> dict:
     return d
 
 
-def issue_token(conn: sqlite3.Connection, user_id: int) -> str:
+def issue_token(conn: PgConnection, user_id: int) -> str:
     """A login token bound to the user's current session epoch."""
     epoch = conn.execute("SELECT session_epoch FROM users WHERE id=?", (user_id,)).fetchone()[0]
     return make_token(user_id, epoch=epoch)
 
 
-def user_for_token(conn: sqlite3.Connection, token: str | None) -> dict | None:
+def user_for_token(conn: PgConnection, token: str | None) -> dict | None:
     """The active user this token belongs to, or None (forged, expired, revoked by logout or password change, or disabled)."""
     parsed = read_token(token)
     if parsed is None:
@@ -127,18 +126,18 @@ def user_for_token(conn: sqlite3.Connection, token: str | None) -> dict | None:
     return _public(row)
 
 
-def revoke_sessions(conn: sqlite3.Connection, user_id: int) -> None:
+def revoke_sessions(conn: PgConnection, user_id: int) -> None:
     """Invalidate every login cookie this user has (used by logout and password changes)."""
     with conn:
         conn.execute("UPDATE users SET session_epoch = session_epoch + 1 WHERE id=?", (user_id,))
 
 
-def get_user(conn: sqlite3.Connection, user_id: int) -> dict | None:
+def get_user(conn: PgConnection, user_id: int) -> dict | None:
     row = conn.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
     return _public(row) if row else None
 
 
-def list_users(conn: sqlite3.Connection) -> list[dict]:
+def list_users(conn: PgConnection) -> list[dict]:
     return [_public(r) for r in conn.execute("SELECT * FROM users ORDER BY id")]
 
 

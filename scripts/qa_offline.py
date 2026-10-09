@@ -14,7 +14,6 @@ TMP = use_throwaway_db("qa_offline_")
 import io  # noqa: E402
 import json  # noqa: E402
 import re  # noqa: E402
-import sqlite3  # noqa: E402
 import statistics  # noqa: E402
 import sys  # noqa: E402
 import time  # noqa: E402
@@ -26,7 +25,7 @@ sys.path.insert(0, str(ROOT / "tests"))
 from conftest import JD_TEXT, _judge  # noqa: E402  (fake AI models used by the test suite)
 
 from app import deps  # noqa: E402
-from app.database import SCHEMA, SEED_ALIASES  # noqa: E402
+from app.database import get_connection, init_db  # noqa: E402
 from app.parsing.document_extractor import extract_document  # noqa: E402
 from app.services import auth_service, dedupe  # noqa: E402
 from app.services import candidate_service as svc  # noqa: E402
@@ -120,11 +119,8 @@ rec.run(S1, "S1-15", "Filename with path tricks ('../../x.pdf') and double exten
 
 # =========================================================================== S6 duplicates and multi-job policy
 S6 = "S6 Duplicates and multi-job policy"
-conn = sqlite3.connect(":memory:", check_same_thread=False)
-conn.row_factory = sqlite3.Row
-conn.execute("PRAGMA foreign_keys = ON")
-conn.executescript(SCHEMA)
-conn.executemany("INSERT INTO skill_aliases (alias, canonical) VALUES (?, ?)", SEED_ALIASES.items())
+init_db()
+conn = get_connection()
 JOB1, _ = svc.create_job(conn, JD_TEXT, canon_llm=_judge, jd_llm=_judge)
 JOB2, _ = svc.create_job(conn, "Data analyst role. Requires Python, SQL and Excel. Freshers welcome, apply with a strong portfolio. " * 2, canon_llm=_judge, jd_llm=_judge)
 

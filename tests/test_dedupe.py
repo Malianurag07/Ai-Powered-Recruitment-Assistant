@@ -1,21 +1,17 @@
-import sqlite3
-
 import pytest
 
-from app.database import SCHEMA
 from app.services import dedupe as d
+from conftest import resync_ids
 
 
 @pytest.fixture
-def conn():
-    c = sqlite3.connect(":memory:")
-    c.row_factory = sqlite3.Row
-    c.execute("PRAGMA foreign_keys = ON")
-    c.executescript(SCHEMA)
+def conn(pg):
+    c = pg
     c.execute("INSERT INTO job_descriptions (id, title) VALUES (1, 'ML Engineer'), (2, 'Tester')")
     c.execute("INSERT INTO candidates (id, name, email, phone) VALUES (1, 'A', 'a@x.com', '+91 98765 43210')")
     c.execute("INSERT INTO applications (candidate_id, job_description_id, resume_hash) VALUES (1, 1, ?)",
               (d.resume_hash("Resume ONE"),))
+    resync_ids(c)                              # the fixture used explicit ids for the first rows
     return c
 
 

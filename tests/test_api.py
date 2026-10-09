@@ -120,7 +120,7 @@ def test_db_viewer_is_whitelisted(client):
     assert client.get("/api/db").json()["candidates"] == 5
     t = client.get("/api/db/candidates?limit=2").json()
     assert t["total"] == 5 and len(t["rows"]) == 2 and "email" in t["columns"]
-    assert client.get("/api/db/sqlite_master").status_code == 404
+    assert client.get("/api/db/pg_tables").status_code == 404
     assert client.get("/api/db/candidates;DROP TABLE candidates").status_code == 404
     assert client.get("/api/db/candidates?limit=99999").status_code == 422
 

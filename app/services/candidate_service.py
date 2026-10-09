@@ -1,9 +1,8 @@
-"""Ties the pipeline together: file -> text -> profile -> verify -> canonical skills -> dedupe -> score -> SQLite.
+"""Ties the pipeline together: file -> text -> profile -> verify -> canonical skills -> dedupe -> score -> database.
 
 All LLM callables are injectable (extract_llm, verify_llm, canon_llm, score_llm) so tests need no API keys.
 """
 import json
-import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
 
@@ -21,6 +20,7 @@ from app.parsing.document_extractor import extract_document
 from app.parsing.ocr import default_reader
 from app.services import dedupe
 from app.services.skill_normalizer import load_aliases
+from app.db import PgConnection
 
 
 @dataclass
@@ -37,12 +37,12 @@ class Outcome:
 
 
 @contextmanager
-def _write_lock(conn: sqlite3.Connection):
-    """Take SQLite's write lock up front (BEGIN IMMEDIATE), so the duplicate check and the insert happen atomically.
+def _write_lock(conn: PgConnection):
+    """Take the app-wide write lock up front, so the duplicate check and the insert happen atomically.
 
     Without it, two uploads of the same person could both see "no active resume yet" and both insert.
     """
-    conn.execute("BEGIN IMMEDIATE")
+    conn.begin_exclusive()
     try:
         yield
         conn.commit()
@@ -56,7 +56,7 @@ def _kw(llm):
 
 
 # ---------------------------------------------------------------- jobs
-def create_job(conn: sqlite3.Connection, text: str, canon_llm=None, jd_llm=None, owner_id: int | None = None) -> tuple[int | None, str]:
+def create_job(conn: PgConnection, text: str, canon_llm=None, jd_llm=None, owner_id: int | None = None) -> tuple[int | None, str]:
     """Parse a job description and store it. Returns (job_id, message); job_id is None on failure."""
     res = extract_job(text, **_kw(jd_llm))
     if res.status != "ok":
@@ -91,7 +91,7 @@ def skills_from_description(summary: str, responsibilities: str, jd_llm=None) ->
     return (res.job.required_skills, res.job.preferred_skills) if res.status == "ok" else ([], [])
 
 
-def create_job_from_profile(conn: sqlite3.Connection, job: JobProfile, responsibilities: str = "", canon_llm=None,
+def create_job_from_profile(conn: PgConnection, job: JobProfile, responsibilities: str = "", canon_llm=None,
                             owner_id: int | None = None) -> tuple[int | None, str]:
     """Store a job whose requirements the recruiter typed in directly (no AI reading step)."""
     if not job.required_skills:
@@ -99,7 +99,7 @@ def create_job_from_profile(conn: sqlite3.Connection, job: JobProfile, responsib
     return _store_job(conn, job, build_job_text(job, responsibilities), canon_llm, owner_id)
 
 
-def _store_job(conn: sqlite3.Connection, job: JobProfile, text: str, canon_llm, owner_id: int | None) -> tuple[int | None, str]:
+def _store_job(conn: PgConnection, job: JobProfile, text: str, canon_llm, owner_id: int | None) -> tuple[int | None, str]:
     aliases = load_aliases(conn)
     mapping, learned = canonicalize_skills(job.required_skills + job.preferred_skills, aliases, **_kw(canon_llm))
     with conn:
@@ -118,7 +118,7 @@ def _store_job(conn: sqlite3.Connection, job: JobProfile, text: str, canon_llm, 
     return job_id, "ok"
 
 
-def get_job(conn: sqlite3.Connection, job_id: int) -> JobProfile | None:
+def get_job(conn: PgConnection, job_id: int) -> JobProfile | None:
     row = conn.execute("SELECT * FROM job_descriptions WHERE id=?", (job_id,)).fetchone()
     if row is None:
         return None
@@ -134,7 +134,7 @@ def get_job(conn: sqlite3.Connection, job_id: int) -> JobProfile | None:
         cutoffs=json.loads(row["cutoffs"]) if row["cutoffs"] else None)
 
 
-def set_job_gates(conn: sqlite3.Connection, job_id: int, skills: list[str]) -> dict:
+def set_job_gates(conn: PgConnection, job_id: int, skills: list[str]) -> dict:
     """Mark which REQUIRED skills are must-haves and relabel every stored candidate. No AI call. Raises ValueError on unknown skills."""
     job = get_job(conn, job_id)
     by_lower = {s.lower(): s for s in job.required_skills}
@@ -154,7 +154,7 @@ def set_job_gates(conn: sqlite3.Connection, job_id: int, skills: list[str]) -> d
     return {"gates": chosen, "relabelled": conn.execute("SELECT COUNT(*) FROM analysis_results WHERE job_description_id=?", (job_id,)).fetchone()[0]}
 
 
-def _relabel(conn: sqlite3.Connection, job: JobProfile, job_id: int) -> int:
+def _relabel(conn: PgConnection, job: JobProfile, job_id: int) -> int:
     """Recompute every stored recommendation from the stored score, the job's cutoffs and its must-haves. Caller holds the transaction."""
     rows = conn.execute("SELECT application_id, match_score, skill_breakdown FROM analysis_results WHERE job_description_id=?", (job_id,)).fetchall()
     for r in rows:
@@ -163,7 +163,7 @@ def _relabel(conn: sqlite3.Connection, job: JobProfile, job_id: int) -> int:
     return len(rows)
 
 
-def set_job_cutoffs(conn: sqlite3.Connection, job_id: int, cutoffs: dict | None) -> dict:
+def set_job_cutoffs(conn: PgConnection, job_id: int, cutoffs: dict | None) -> dict:
     """Save a job's Shortlist/Consider cutoffs (None resets) and relabel every stored score. No AI call. Raises ValueError."""
     if cutoffs is not None:
         cutoffs = validate_cutoffs(cutoffs)
@@ -177,7 +177,7 @@ def set_job_cutoffs(conn: sqlite3.Connection, job_id: int, cutoffs: dict | None)
     return {"cutoffs": effective_cutoffs(job), "custom": cutoffs is not None, "relabelled": relabelled}
 
 
-def set_job_weights(conn: sqlite3.Connection, job_id: int, percent: dict | None) -> dict:
+def set_job_weights(conn: PgConnection, job_id: int, percent: dict | None) -> dict:
     """Save a job's score weights (None resets to the defaults) and recompute every stored score from the stored component
     scores. No AI call is made: only the final score and the recommendation change. Raises ValueError for invalid weights."""
     if percent is not None:
@@ -217,7 +217,7 @@ def _store_analysis(conn, app_id: int, job_id: int, s: ScoreResult) -> None:
          json.dumps(s.interview_questions), s.recommendation))
 
 
-def process_resume(conn: sqlite3.Connection, data: bytes, filename: str, job_id: int, **kwargs) -> Outcome:
+def process_resume(conn: PgConnection, data: bytes, filename: str, job_id: int, **kwargs) -> Outcome:
     """Run one resume through the whole pipeline (see _process_resume). Adds an 'OCR' note when the file was a scan."""
     flag: list[bool] = []
     outcome = _process_resume(conn, data, filename, job_id, _ocr_flag=flag, **kwargs)
@@ -227,7 +227,7 @@ def process_resume(conn: sqlite3.Connection, data: bytes, filename: str, job_id:
     return outcome
 
 
-def _process_resume(conn: sqlite3.Connection, data: bytes, filename: str, job_id: int, *, _ocr_flag: list,
+def _process_resume(conn: PgConnection, data: bytes, filename: str, job_id: int, *, _ocr_flag: list,
                     extract_llm=None, verify_llm=None, canon_llm=None, score_llm=None, embed_llm=None, ocr_llm=None) -> Outcome:
     job = get_job(conn, job_id)
     if job is None:
@@ -315,7 +315,7 @@ def _embedder(embed_llm):
     return client.embed if SEMANTIC_INDEXING else None
 
 
-def _index_chunks(conn: sqlite3.Connection, application_id: int, text: str, embed_llm=None) -> int:
+def _index_chunks(conn: PgConnection, application_id: int, text: str, embed_llm=None) -> int:
     """Store the resume as searchable chunks. Embeddings are optional: if the API is down, keyword search still works."""
     chunks = chunk_text(text)
     vecs: list = [None] * len(chunks)
@@ -331,7 +331,7 @@ def _index_chunks(conn: sqlite3.Connection, application_id: int, text: str, embe
     return len(chunks)
 
 
-def reindex_missing_embeddings(conn: sqlite3.Connection, job_id: int, embed_llm=None) -> int:
+def reindex_missing_embeddings(conn: PgConnection, job_id: int, embed_llm=None) -> int:
     """Create chunks for resumes that have none, and add embeddings where they are missing. Returns chunks embedded."""
     for row in conn.execute("""SELECT a.id, a.raw_text FROM applications a WHERE a.job_description_id = ?
                                AND NOT EXISTS (SELECT 1 FROM resume_chunks c WHERE c.application_id = a.id)""", (job_id,)).fetchall():
@@ -352,7 +352,7 @@ def reindex_missing_embeddings(conn: sqlite3.Connection, job_id: int, embed_llm=
     return len(rows)
 
 
-def resolve_conflict(conn: sqlite3.Connection, keep_application_id: int, *, score_llm=None) -> Outcome:
+def resolve_conflict(conn: PgConnection, keep_application_id: int, *, score_llm=None) -> Outcome:
     """The applicant chose which resume to keep. Activate it and score it if it has not been scored."""
     row = conn.execute("SELECT * FROM applications WHERE id=?", (keep_application_id,)).fetchone()
     if row is None:
@@ -373,7 +373,7 @@ def resolve_conflict(conn: sqlite3.Connection, keep_application_id: int, *, scor
                    score["recommendation"] if score else None, row["verification_status"])
 
 
-def rescore_unavailable(conn: sqlite3.Connection, job_id: int, *, score_llm=None) -> list[dict]:
+def rescore_unavailable(conn: PgConnection, job_id: int, *, score_llm=None) -> list[dict]:
     """Re-run scoring for analyses whose LLM step failed earlier (rate limit, outage). Uses the stored profile."""
     job = get_job(conn, job_id)
     aliases = load_aliases(conn)
@@ -391,7 +391,7 @@ def rescore_unavailable(conn: sqlite3.Connection, job_id: int, *, score_llm=None
     return out
 
 
-def preview_pending_scores(conn: sqlite3.Connection, job_id: int, *, score_llm=None) -> list[dict]:
+def preview_pending_scores(conn: PgConnection, job_id: int, *, score_llm=None) -> list[dict]:
     """Score resumes waiting in `pending_choice` WITHOUT activating them, so the choice can be an informed one."""
     job = get_job(conn, job_id)
     aliases = load_aliases(conn)
@@ -412,7 +412,7 @@ def preview_pending_scores(conn: sqlite3.Connection, job_id: int, *, score_llm=N
 
 
 # ---------------------------------------------------------------- reads
-def ranking(conn: sqlite3.Connection, job_id: int, limit: int | None = None) -> list[dict]:
+def ranking(conn: PgConnection, job_id: int, limit: int | None = None) -> list[dict]:
     """Active, scored applications for a job, best first. Pending and unscored ones are excluded."""
     sql = """SELECT a.id AS application_id, c.name, c.email, c.phone, a.resume_filename, a.experience_years,
                     r.match_score, r.recommendation, r.skill_match_ratio, r.summary
@@ -425,7 +425,7 @@ def ranking(conn: sqlite3.Connection, job_id: int, limit: int | None = None) -> 
     return [dict(r) for r in rows]
 
 
-def pending_conflicts(conn: sqlite3.Connection, job_id: int) -> list[dict]:
+def pending_conflicts(conn: PgConnection, job_id: int) -> list[dict]:
     rows = conn.execute(
         """SELECT p.id AS pending_id, p.resume_filename AS new_file, act.id AS active_id, act.resume_filename AS current_file,
                   c.name, c.email

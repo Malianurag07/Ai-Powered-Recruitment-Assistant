@@ -1,6 +1,4 @@
-"""DATABASE_URL switches the app to Postgres; with it unset nothing changes. Tested with a fake driver (no Postgres server)."""
-import sqlite3
-
+"""DATABASE_URL selects the database and nothing else does. Tested with a fake driver: no Postgres server is contacted."""
 import pytest
 
 from app import config, database, db
@@ -29,16 +27,15 @@ def fake_pg(monkeypatch):
     return fake
 
 
-def test_default_is_sqlite():
-    assert config.DATABASE_URL == ""
-    conn = database.get_connection()
-    assert isinstance(conn, sqlite3.Connection) and not db.is_postgres(conn)
-    conn.close()
+def test_without_a_database_url_the_error_says_what_to_do(monkeypatch):
+    monkeypatch.setattr(config, "DATABASE_URL", "")
+    with pytest.raises(RuntimeError, match="DATABASE_URL is not set"):
+        database.get_connection()
 
 
-def test_database_url_gives_a_postgres_connection_opened_the_safe_way(fake_pg):
+def test_database_url_gives_a_connection_opened_the_safe_way(fake_pg):
     conn = database.get_connection()
-    assert isinstance(conn, PgConnection) and db.is_postgres(conn)
+    assert isinstance(conn, PgConnection)
     url, kwargs = fake_pg.calls[0]
     assert url == "postgresql://u:p@db.example:5432/shortlist"
     assert kwargs["autocommit"] is True and kwargs["connect_timeout"] == 10        # transactions are managed by the adapter; no endless hangs
@@ -55,43 +52,39 @@ def test_init_db_creates_the_schema_upgrades_and_seeds_aliases(fake_pg):
     database.init_db()
     raw = fake_pg.raw
     sqls = raw.sql()
-    assert sqls[0] == database.SCHEMA_PG                                            # the whole schema, in one go
-    upgrades = [s for s in sqls if s.startswith("ALTER TABLE")]
-    assert upgrades == list(database.PG_UPGRADES)
+    assert sqls[0] == database.SCHEMA                                               # the whole schema, in one go
+    assert [s for s in sqls if s.startswith("ALTER TABLE")] == list(database.SCHEMA_UPGRADES)
     seed = [e for e in raw.log if e[0] == "executemany"]
     assert len(seed) == 1 and "ON CONFLICT (alias) DO NOTHING" in seed[0][1] and "%s" in seed[0][1]
     assert len(seed[0][2]) == len(database.SEED_ALIASES)
     assert sqls[-1] == "COMMIT" and raw.closed                                      # committed and released
 
 
-def test_init_db_on_sqlite_does_not_touch_postgres(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DATABASE_PATH", tmp_path / "x.db")
-    database.init_db()
-    c = sqlite3.connect(tmp_path / "x.db")
-    assert c.execute("SELECT COUNT(*) FROM skill_aliases").fetchone()[0] == len(database.SEED_ALIASES)
-
-
-def test_quota_counter_does_not_create_its_table_on_postgres(fake_pg):
-    conn = quota._conn()
-    assert db.is_postgres(conn)
-    assert not any("CREATE TABLE" in s for s in fake_pg.raw.sql())                  # it is part of SCHEMA_PG
+def test_quota_counter_writes_one_upsert_and_never_creates_its_table(fake_pg):
     quota.record_call("gemini")
-    inserts = [s for s in fake_pg.raw.sql() if s.startswith("INSERT INTO ai_usage")]
+    sqls = fake_pg.raw.sql()
+    assert not any("CREATE TABLE" in s for s in sqls)                               # ai_usage is part of the schema
+    inserts = [s for s in sqls if s.startswith("INSERT INTO ai_usage")]
     assert inserts and "ON CONFLICT(day, bucket) DO UPDATE" in inserts[0] and "%s" in inserts[0] and "RETURNING" not in inserts[0]
 
 
-def test_duplicate_account_is_reported_the_same_way_on_both_databases(monkeypatch):
-    """create_user must turn the driver's duplicate-email error into AuthError, whichever driver raised it."""
+def test_duplicate_account_is_reported_as_a_friendly_error(monkeypatch):
+    """create_user turns the driver's duplicate-email error into AuthError."""
     from app.services import auth_service as auth
 
-    class PgDup(Exception):
+    class Dup(Exception):
         pass
 
     class Conn:
-        def __enter__(self): return self
-        def __exit__(self, *a): return False
-        def execute(self, *a, **k): raise PgDup("duplicate key value violates unique constraint")
+        def __enter__(self):
+            return self
 
-    monkeypatch.setattr(auth, "INTEGRITY_ERRORS", (sqlite3.IntegrityError, PgDup))
+        def __exit__(self, *a):
+            return False
+
+        def execute(self, *a, **k):
+            raise Dup("duplicate key value violates unique constraint")
+
+    monkeypatch.setattr(auth, "INTEGRITY_ERRORS", (Dup,))
     with pytest.raises(auth.AuthError, match="already exists"):
         auth.create_user(Conn(), "dup@x.com", "Passw0rd!long", "Dup", "recruiter")

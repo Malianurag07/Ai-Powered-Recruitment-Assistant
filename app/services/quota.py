@@ -6,14 +6,13 @@ Honest sources of the "remaining" number:
   * Gemini sends no remaining-quota information, so we count the calls this app made today and compare with GEMINI_CALLS_PER_DAY.
     That ignores use of the same key elsewhere, so it is an estimate and the UI says so.
 """
-import sqlite3
 import threading
 import time
 from datetime import date
 
 from app import config
 from app.database import get_connection
-from app.db import is_postgres
+from app.db import PgConnection
 
 # AI calls one resume costs, by quota bucket (measured about 6.6 to 8: extraction + name matching, meaning match + judge samples,
 # second-check + embeddings). Used only for planning; the real pipeline is unchanged.
@@ -28,13 +27,8 @@ _headers: dict[str, dict] = {}        # bucket -> {"remaining": int, "limit": in
 _last_rate_limited = 0.0
 
 
-def _conn() -> sqlite3.Connection:
-    conn = get_connection(check_same_thread=False)
-    if is_postgres(conn):                      # on Postgres the table is created with the rest of the schema
-        return conn
-    conn.execute("CREATE TABLE IF NOT EXISTS ai_usage (day TEXT NOT NULL, bucket TEXT NOT NULL, calls INTEGER NOT NULL DEFAULT 0, "
-                 "PRIMARY KEY (day, bucket))")
-    return conn
+def _conn() -> PgConnection:
+    return get_connection()               # the ai_usage table is part of the schema
 
 
 def bucket_for(provider: str, model: str | None) -> str:

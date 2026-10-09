@@ -1,11 +1,9 @@
-import sqlite3
 import time
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app import config, deps
-from app.database import SCHEMA
 from app.main import app
 from app.services import auth_service as auth
 
@@ -13,12 +11,9 @@ PW = "correct horse"
 
 
 @pytest.fixture
-def conn():
-    c = sqlite3.connect(":memory:", check_same_thread=False)
-    c.row_factory = sqlite3.Row
-    c.executescript(SCHEMA)
+def conn(pg):
     auth._fails.clear()
-    return c
+    return pg
 
 
 # ---------- service ----------
@@ -272,18 +267,6 @@ def test_security_headers_on_every_response(api):
         assert "frame-ancestors 'none'" in h["content-security-policy"]
 
 
-def test_old_database_without_session_epoch_is_upgraded(tmp_path, monkeypatch):
-    import app.database as dbm
-    path = tmp_path / "old.db"
-    old = sqlite3.connect(path)
-    old.execute("CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL UNIQUE, name TEXT NOT NULL DEFAULT '', "
-                "password_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'recruiter', is_active INTEGER NOT NULL DEFAULT 1, "
-                "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, last_login_at TEXT)")
-    old.commit(); old.close()
-    monkeypatch.setattr(dbm, "DATABASE_PATH", path)
-    dbm.init_db()
-    cols = {r[1] for r in sqlite3.connect(path).execute("PRAGMA table_info(users)")}
-    assert "session_epoch" in cols
 
 
 # ---------- accounts must not see each other's jobs (reported by the user during a manual test) ----------
@@ -345,15 +328,6 @@ def test_jobs_made_before_owners_existed_are_admin_only(api, conn):
     assert admin.get(f"/api/jobs/{old}").status_code == 200
 
 
-def test_old_database_without_job_owner_is_upgraded(tmp_path, monkeypatch):
-    import app.database as dbm
-    path = tmp_path / "old2.db"
-    old = sqlite3.connect(path)
-    old.execute("CREATE TABLE job_descriptions (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, raw_text TEXT NOT NULL)")
-    old.commit(); old.close()
-    monkeypatch.setattr(dbm, "DATABASE_PATH", path)
-    dbm.init_db()
-    assert "owner_id" in {r[1] for r in sqlite3.connect(path).execute("PRAGMA table_info(job_descriptions)")}
 
 
 # ---------- login is on by default: the first account on a fresh install becomes the admin ----------

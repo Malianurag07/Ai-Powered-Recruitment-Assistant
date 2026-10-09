@@ -1,8 +1,8 @@
 """Shared FastAPI dependencies: one private database connection per request, plus injectable LLM overrides."""
-import sqlite3
 from typing import Iterator
 
 from app.database import get_connection, init_db
+from app.db import PgConnection
 
 # Tests put fake LLM callables here (extract_llm=..., score_llm=..., plan_llm=...); in production these stay empty
 # and the pipeline uses the real Groq/Gemini clients.
@@ -11,8 +11,8 @@ CHAT_LLMS: dict = {}
 JOB_LLMS: dict = {}
 
 
-def get_db() -> Iterator[sqlite3.Connection]:
-    conn = get_connection(check_same_thread=False)
+def get_db() -> Iterator[PgConnection]:
+    conn = get_connection()
     try:
         yield conn
     finally:

@@ -1,6 +1,7 @@
-"""End-to-end demo: fresh database -> job description -> every sample resume -> ranking + DB summary.
+"""End-to-end demo: emptied database -> job description -> every sample resume -> ranking + DB summary.
 
-Run from the project root:   python scripts/demo_pipeline.py
+Run from the project root:   python scripts/demo_pipeline.py --wipe
+It EMPTIES every data table in the database named by DATABASE_URL first (accounts included), so it refuses to run without --wipe.
 """
 import sys
 import time
@@ -9,14 +10,18 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from app.config import DATABASE_PATH  # noqa: E402
+from app.config import DATABASE_URL  # noqa: E402
 from app.database import get_connection, init_db  # noqa: E402
 from app.services import candidate_service as svc  # noqa: E402
 
-if DATABASE_PATH.exists():
-    DATABASE_PATH.unlink()
+if "--wipe" not in sys.argv:
+    sys.exit("This empties every table in the database named by DATABASE_URL. Run it again with --wipe if that is what you want.")
 init_db()
 conn = get_connection()
+with conn:
+    conn.execute("TRUNCATE users, candidates, job_descriptions, job_required_skills, applications, application_skills, resume_chunks, "
+                 "analysis_results, verification_log, chat_history, ai_usage RESTART IDENTITY CASCADE")     # skill_aliases is kept
+print("Emptied the database at", DATABASE_URL.split("@")[-1])
 
 jd_text = (ROOT / "data" / "sample_job_description.txt").read_text(encoding="utf-8")
 job_id, msg = svc.create_job(conn, jd_text)

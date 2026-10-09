@@ -19,10 +19,11 @@ sys.path.insert(0, str(ROOT))
 
 
 def use_throwaway_db(prefix: str) -> Path:
-    """Must be called before importing anything from app: points DATABASE_PATH at a temporary file."""
-    tmp = Path(tempfile.mkdtemp(prefix=prefix))
-    os.environ["DATABASE_PATH"] = str(tmp / "qa.db")
-    return tmp
+    """Must be called before importing anything from app: points DATABASE_URL at a throw-away schema in the Postgres named by
+    TEST_DATABASE_URL (dropped when the script exits). Returns a temporary folder for any files the suite writes."""
+    from pg_scratch import use_scratch_schema
+    use_scratch_schema(prefix.rstrip("_"))
+    return Path(tempfile.mkdtemp(prefix=prefix))
 
 
 @dataclass

@@ -1,4 +1,4 @@
-"""Live test of the recruiter chat: the 10 assessment questions plus extras, against data/recruitment.db.
+"""Live test of the recruiter chat: the 10 assessment questions plus extras, against the database named by DATABASE_URL.
 
 Run after scripts/demo_pipeline.py:   python scripts/test_queries.py
 Each question shows which tools the AI chose (PASS/FAIL on routing), then the written answer.

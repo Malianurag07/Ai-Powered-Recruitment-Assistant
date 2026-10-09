@@ -137,7 +137,7 @@ def test_local_mode_has_no_embeddings_so_search_falls_back_to_keywords(monkeypat
         client.embed(["anything"])
 
 
-def test_health_reports_the_ai_mode():
+def test_health_reports_the_ai_mode(pg):
     from fastapi.testclient import TestClient
     from app.main import app
     with TestClient(app) as c:

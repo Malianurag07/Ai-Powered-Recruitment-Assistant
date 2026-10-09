@@ -7,7 +7,6 @@ case says so explicitly, so the assistant has nothing to invent.
 import difflib
 import json
 import re
-import sqlite3
 from dataclasses import dataclass
 from typing import Callable
 
@@ -15,11 +14,12 @@ from app.llm import client
 from app.llm.retrieval import hybrid_rank, unpack
 from app.llm.scoring import COLOUR, _canon, _implied_tools, effective_weights
 from app.models import JobProfile
+from app.db import PgConnection
 
 
 @dataclass
 class Ctx:
-    conn: sqlite3.Connection
+    conn: PgConnection
     job_id: int
     aliases: dict[str, str]
     job: JobProfile

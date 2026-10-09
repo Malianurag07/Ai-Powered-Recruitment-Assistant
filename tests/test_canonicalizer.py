@@ -1,7 +1,5 @@
 import json
-import sqlite3
 
-from app.database import SCHEMA
 from app.llm.client import LLMError
 from app.llm.skill_canonicalizer import canonicalize_profile, canonicalize_skills, save_learned
 from app.models import CandidateProfile
@@ -54,8 +52,7 @@ def test_profile_dedupes_after_canonicalizing_and_maps_levels():
     assert new.skill_levels == {"Machine Learning": "basic"}
 
 
-def test_learned_aliases_persist_and_are_audited():
-    conn = sqlite3.connect(":memory:")
-    conn.executescript(SCHEMA)
+def test_learned_aliases_persist_and_are_audited(pg):
+    conn = pg
     save_learned(conn, {"nodejs": "Node.js"})
     assert conn.execute("SELECT canonical, source FROM skill_aliases WHERE alias='nodejs'").fetchone() == ("Node.js", "ai")

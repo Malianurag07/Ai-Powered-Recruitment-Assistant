@@ -2,7 +2,6 @@
 import csv
 import io
 import json
-import sqlite3
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -12,12 +11,13 @@ from app.llm.scoring import gate_failures, default_cutoffs, default_weights_perc
 from app.llm.query_tools import Ctx, load_candidates
 from app.services import candidate_service as svc
 from app.services.skill_normalizer import load_aliases
+from app.db import PgConnection
 
 VIEWABLE_TABLES = ("candidates", "job_descriptions", "job_required_skills", "applications", "application_skills",
                    "analysis_results", "verification_log", "skill_aliases", "chat_history")
 
 
-def list_jobs(conn: sqlite3.Connection, owner_id: int | None = None, include_owner: bool = False) -> list[dict]:
+def list_jobs(conn: PgConnection, owner_id: int | None = None, include_owner: bool = False) -> list[dict]:
     """owner_id limits the list to one user's jobs; None means every job (admins, or login switched off)."""
     where, args = ("WHERE j.owner_id = ?", (owner_id,)) if owner_id is not None else ("", ())
     jobs = []
@@ -33,7 +33,7 @@ def list_jobs(conn: sqlite3.Connection, owner_id: int | None = None, include_own
     return jobs
 
 
-def job_detail(conn: sqlite3.Connection, job_id: int) -> dict | None:
+def job_detail(conn: PgConnection, job_id: int) -> dict | None:
     job = svc.get_job(conn, job_id)
     if job is None:
         return None
@@ -54,7 +54,7 @@ def job_detail(conn: sqlite3.Connection, job_id: int) -> dict | None:
             "pending_choices": len(svc.pending_conflicts(conn, job_id)), "needs_review": review, "failed_analyses": failed}
 
 
-def candidate_cards(conn: sqlite3.Connection, job_id: int) -> list[dict]:
+def candidate_cards(conn: PgConnection, job_id: int) -> list[dict]:
     job = svc.get_job(conn, job_id)
     if job is None:
         return []
@@ -80,7 +80,7 @@ def candidate_cards(conn: sqlite3.Connection, job_id: int) -> list[dict]:
     return cards
 
 
-def needs_review(conn: sqlite3.Connection, job_id: int) -> list[dict]:
+def needs_review(conn: PgConnection, job_id: int) -> list[dict]:
     rows = conn.execute(
         """SELECT a.id AS application_id, c.name, c.email, a.resume_filename, a.extraction_status, a.verification_status
            FROM applications a JOIN candidates c ON c.id = a.candidate_id
@@ -100,7 +100,7 @@ def safe_cell(value):
     return value
 
 
-def ranking_csv(conn: sqlite3.Connection, job_id: int) -> str:
+def ranking_csv(conn: PgConnection, job_id: int) -> str:
     out = io.StringIO()
     w = csv.writer(out)
     w.writerow(["rank", "name", "email", "phone", "score", "recommendation", "required_skills_matched", "experience_years",
@@ -119,7 +119,7 @@ _REC_FILL = {"Shortlist": "C6EFCE", "Consider": "FFEB9C", "Reject": "FFC7CE"}
 _BADGE_FILL = {"green": "C6EFCE", "yellow": "FFEB9C", "orange": "F8CBAD", "red": "FFC7CE"}
 
 
-def ranking_xlsx(conn: sqlite3.Connection, job_id: int) -> bytes:
+def ranking_xlsx(conn: PgConnection, job_id: int) -> bytes:
     """Two-sheet workbook: the ranking, and a candidate x skill matrix coloured like the UI's skill badges."""
     job = svc.get_job(conn, job_id)
     cards = candidate_cards(conn, job_id)
@@ -163,7 +163,7 @@ def ranking_xlsx(conn: sqlite3.Connection, job_id: int) -> bytes:
     return buf.getvalue()
 
 
-def table_rows(conn: sqlite3.Connection, table: str, limit: int = 100) -> dict:
+def table_rows(conn: PgConnection, table: str, limit: int = 100) -> dict:
     """Read-only table viewer for the demo. The table name is checked against a fixed whitelist, never interpolated blindly."""
     if table not in VIEWABLE_TABLES:
         raise KeyError(table)
@@ -174,5 +174,5 @@ def table_rows(conn: sqlite3.Connection, table: str, limit: int = 100) -> dict:
     return {"table": table, "columns": cols, "rows": rows, "total": total}
 
 
-def table_counts(conn: sqlite3.Connection) -> dict:
+def table_counts(conn: PgConnection) -> dict:
     return {t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in VIEWABLE_TABLES}  # noqa: S608

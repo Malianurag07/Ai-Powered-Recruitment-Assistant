@@ -9,7 +9,7 @@ different models; both changed for reasons noted below, and this version matches
 |---|---|---|
 | Backend | Python + FastAPI | Async-capable, automatic API docs, Pydantic validation |
 | Frontend | HTML + Tailwind CSS (CDN) + vanilla JavaScript, served by FastAPI | No build step, one command to run, full control over design and behaviour |
-| Database | SQLite | Zero setup, file-based, free, enough for one recruiter's pool |
+| Database | PostgreSQL | Concurrent writers, durable storage, hosted anywhere (was SQLite in the first version) |
 | Parsing | PyMuPDF (PDF), python-docx (Word) | Fast, handles multi-column layouts, reads Word tables in order |
 | Search | BM25 keyword + Gemini embeddings, fused by weighted rank | Structured SQL first; semantic search only for concept questions |
 | LLMs | Groq (`qwen3.8-27b`, `gpt-oss-120b`), Gemini (`gemini-3.1-flash-lite`), optional Ollama (local Llama) | Free tiers; swappable in `llm/client.py`; verified live against each account |
@@ -26,7 +26,7 @@ Upload (resume PDF/DOCX, job PDF/DOCX/TXT/text)
   4. Skill normalisation      alias table; unknown skills batched to the AI and saved back (source='ai')
   5. Duplicate check          same email OR phone, per job, under a write lock (see policy below)
   6. Scoring                  skills + experience in code; projects/education + fit judged by AI, median of 3, rounded
-  7. Storage + search index   SQLite rows, plus resume chunks with embeddings (best effort)
+  7. Storage + search index   database rows, plus resume chunks with embeddings (best effort)
 Chat: plan (AI -> JSON tool calls) -> execute (fixed SQL tools) -> answer (AI, using only the results)
 ```
 

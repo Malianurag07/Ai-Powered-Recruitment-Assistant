@@ -227,7 +227,7 @@ def test_docx_link_label_keeps_its_address():
     assert "Links: https://someone.example.app" in r.text and r.text.count("github.com/someone") == 1
 
 
-def test_extract_preview_returns_text_without_saving(tmp_path):
+def test_extract_preview_returns_text_without_saving(pg):
     from fastapi.testclient import TestClient
     from app.main import app
     c = TestClient(app)

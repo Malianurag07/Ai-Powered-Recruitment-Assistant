@@ -3,13 +3,13 @@
 `current_user` is the dependency that guards every other router (see main.py). With AUTH_ENABLED off it returns a
 built-in admin, so the app behaves exactly as before and needs no login.
 """
-import sqlite3
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from app import config, deps
 from app.services import auth_service as svc
+from app.db import PgConnection
 
 COOKIE = "session"
 ANONYMOUS = {"id": 0, "email": "", "name": "Local user", "role": "admin", "is_active": True}
@@ -17,7 +17,7 @@ ANONYMOUS = {"id": 0, "email": "", "name": "Local user", "role": "admin", "is_ac
 router = APIRouter(prefix="/api", tags=["auth"])
 
 
-def current_user(request: Request, db: sqlite3.Connection = Depends(deps.get_db)) -> dict:
+def current_user(request: Request, db: PgConnection = Depends(deps.get_db)) -> dict:
     if not config.AUTH_ENABLED:
         return ANONYMOUS
     user = svc.user_for_token(db, request.cookies.get(COOKIE))   # checked against the database every time: disabling a user,
@@ -67,7 +67,7 @@ def _fail(e: svc.AuthError, code: int = 422):
 
 
 @router.get("/auth/status")
-def status(request: Request, db: sqlite3.Connection = Depends(deps.get_db)):
+def status(request: Request, db: PgConnection = Depends(deps.get_db)):
     """Public: lets the UI know whether login is required, whether sign-up is open, and who is signed in (null if nobody;
     reported here rather than via a 401 on /auth/me so a visitor's first page load logs no error)."""
     open_ = config.AUTH_ENABLED and (config.ALLOW_REGISTRATION or not svc.has_users(db))
@@ -76,7 +76,7 @@ def status(request: Request, db: sqlite3.Connection = Depends(deps.get_db)):
 
 
 @router.post("/auth/login")
-def login(body: Login, response: Response, db: sqlite3.Connection = Depends(deps.get_db)):
+def login(body: Login, response: Response, db: PgConnection = Depends(deps.get_db)):
     if not config.AUTH_ENABLED:
         return {"user": ANONYMOUS}
     try:
@@ -89,7 +89,7 @@ def login(body: Login, response: Response, db: sqlite3.Connection = Depends(deps
 
 
 @router.post("/auth/register", status_code=201)
-def register(body: Register, request: Request, response: Response, db: sqlite3.Connection = Depends(deps.get_db)):
+def register(body: Register, request: Request, response: Response, db: PgConnection = Depends(deps.get_db)):
     """Anyone can create an account (when ALLOW_REGISTRATION is on) and is signed in straight away: a recruiter, or the admin if this is the first account."""
     if not (config.AUTH_ENABLED and (config.ALLOW_REGISTRATION or not svc.has_users(db))):
         raise HTTPException(403, "Registration is closed. Ask an admin to create your account.")
@@ -103,7 +103,7 @@ def register(body: Register, request: Request, response: Response, db: sqlite3.C
 
 
 @router.post("/auth/logout")
-def logout(request: Request, response: Response, db: sqlite3.Connection = Depends(deps.get_db)):
+def logout(request: Request, response: Response, db: PgConnection = Depends(deps.get_db)):
     """Signing out also revokes the copied cookie: a stolen or saved cookie stops working (on all this user's devices)."""
     user = svc.user_for_token(db, request.cookies.get(COOKIE)) if config.AUTH_ENABLED else None
     if user:
@@ -118,7 +118,7 @@ def me(user: dict = Depends(current_user)):
 
 
 @router.post("/auth/password")
-def change_own_password(body: PasswordChange, response: Response, user: dict = Depends(current_user), db: sqlite3.Connection = Depends(deps.get_db)):
+def change_own_password(body: PasswordChange, response: Response, user: dict = Depends(current_user), db: PgConnection = Depends(deps.get_db)):
     """A signed-in user changes their own password; the current one must be supplied."""
     if not config.AUTH_ENABLED:
         raise HTTPException(400, "Authentication is turned off.")
@@ -136,12 +136,12 @@ def change_own_password(body: PasswordChange, response: Response, user: dict = D
 
 # ---------- admin only ----------
 @router.get("/users")
-def list_users(_: dict = Depends(require_admin), db: sqlite3.Connection = Depends(deps.get_db)):
+def list_users(_: dict = Depends(require_admin), db: PgConnection = Depends(deps.get_db)):
     return svc.list_users(db)
 
 
 @router.post("/users", status_code=201)
-def create_user(body: NewUser, _: dict = Depends(require_admin), db: sqlite3.Connection = Depends(deps.get_db)):
+def create_user(body: NewUser, _: dict = Depends(require_admin), db: PgConnection = Depends(deps.get_db)):
     try:
         return svc.create_user(db, body.email, body.password, body.name, body.role)
     except svc.AuthError as e:
@@ -149,7 +149,7 @@ def create_user(body: NewUser, _: dict = Depends(require_admin), db: sqlite3.Con
 
 
 @router.patch("/users/{user_id}")
-def update_user(user_id: int, body: UserPatch, admin: dict = Depends(require_admin), db: sqlite3.Connection = Depends(deps.get_db)):
+def update_user(user_id: int, body: UserPatch, admin: dict = Depends(require_admin), db: PgConnection = Depends(deps.get_db)):
     if user_id == admin["id"] and (body.is_active is False or (body.role and body.role != "admin")):
         raise HTTPException(422, "You cannot demote or deactivate yourself.")
     try:
@@ -159,7 +159,7 @@ def update_user(user_id: int, body: UserPatch, admin: dict = Depends(require_adm
 
 
 @router.delete("/users/{user_id}")
-def delete_user(user_id: int, admin: dict = Depends(require_admin), db: sqlite3.Connection = Depends(deps.get_db)):
+def delete_user(user_id: int, admin: dict = Depends(require_admin), db: PgConnection = Depends(deps.get_db)):
     if user_id == admin["id"]:
         raise HTTPException(422, "You cannot delete yourself.")
     try:

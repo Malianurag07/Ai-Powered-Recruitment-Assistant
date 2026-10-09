@@ -892,7 +892,7 @@ const io = "IntersectionObserver" in window ? new IntersectionObserver((ents) =>
 $$(".reveal").forEach((el) => (io ? io.observe(el) : el.classList.add("in")));
 
 // Footer tells the truth about where the AI runs (cloud APIs or a self-hosted model).
-api("/api/health").then((h) => { if (h.llm_mode === "local") $("#footMode").textContent = "Shortlist · FastAPI · SQLite · self-hosted local model (nothing leaves this machine)"; }).catch(() => {});
+api("/api/health").then((h) => { if (h.llm_mode === "local") $("#footMode").textContent = "Shortlist · FastAPI · PostgreSQL · self-hosted local model (nothing leaves this machine)"; }).catch(() => {});
 
 // Boot: ask the server whether login is required, restore an existing session, then start routing.
 (async () => {
