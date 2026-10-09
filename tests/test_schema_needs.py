@@ -34,9 +34,9 @@ def schema():
                 pk = {name}
             if "UNIQUE" in rest:
                 unique.append({name})
-            ref = re.search(r"REFERENCES (\w+)\((\w+)\)", rest)
+            ref = re.search(r"REFERENCES (\w+)\((\w+)\)(?: ON DELETE (CASCADE))?", rest)
             if ref:
-                fks.append((name, ref.group(1), ref.group(2)))
+                fks.append((name, ref.group(1), ref.group(2), ref.group(3) or "NO ACTION"))
         for c in pk:
             cols[c]["notnull"] = True
         out[table] = {"cols": cols, "unique": unique, "pk": pk, "fks": fks}
@@ -305,3 +305,24 @@ def test_indexes_the_code_depends_on_exist():
     for name in ("uq_active_application", "idx_app_skills_name", "idx_chunks_app"):
         assert f"INDEX IF NOT EXISTS {name}" in text, name
     assert "(lower(skill_name))" in text                                             # case-insensitive skill lookups
+
+
+def test_every_foreign_key_cascades_on_delete():
+    """Deleting a job, a resume or a person must remove everything under it: the delete endpoints rely on ON DELETE CASCADE, not on extra code."""
+    bad = [(table, fk) for table, info in SCH.items() for fk in info["fks"] if fk[3] != "CASCADE"]
+    assert not bad, bad
+    assert sum(len(info["fks"]) for info in SCH.values()) == 9              # the foreign keys the schema had when it was checked against the live file
+
+
+def test_column_types_are_postgres_types_and_floats_are_double_precision():
+    types = {}
+    text = re.sub(r"--[^\n]*", "", SCHEMA)
+    for m in re.finditer(r"CREATE TABLE IF NOT EXISTS (\w+) \((.*?)\n\);", text, re.S):
+        for line in [x.strip().rstrip(",") for x in m.group(2).split("\n") if x.strip() and not x.strip().startswith("PRIMARY KEY")]:
+            name, rest = line.split(None, 1)
+            types[(m.group(1), name)] = re.match(r"(DOUBLE PRECISION|\w+)", rest).group(1)
+    assert set(types.values()) == {"INTEGER", "TEXT", "DOUBLE PRECISION", "BYTEA"}
+    for key in (("analysis_results", "match_score"), ("analysis_results", "skill_match_ratio"), ("applications", "experience_years"),
+                ("job_descriptions", "min_experience_years")):
+        assert types[key] == "DOUBLE PRECISION", key
+    assert types[("resume_chunks", "embedding")] == "BYTEA"
